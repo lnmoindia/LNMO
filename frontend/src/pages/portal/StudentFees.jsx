@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
-import { Wallet, Printer, ChevronDown, FileDown } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Wallet, Printer, ChevronDown, FileDown, FileText } from "lucide-react";
 import api from "../../lib/api";
-import { inr, StatusChip, printReceiptById, downloadReceiptPdf } from "../../lib/fees";
+import { inr, StatusChip, printReceiptById, downloadReceiptPdf, downloadBlob } from "../../lib/fees";
+import InvoicePay from "./InvoicePay";
 
 const Tile = ({ label, value, tone, testid }) => (
   <div className="rounded-2xl bg-slate-50 dark:bg-slate-800/60 p-3">
@@ -10,18 +11,19 @@ const Tile = ({ label, value, tone, testid }) => (
   </div>
 );
 
-export default function StudentFees({ endpoint, testid = "fees-card", defaultOpen = false }) {
+export default function StudentFees({ endpoint, testid = "fees-card", defaultOpen = false, parentChildId = null }) {
   const [d, setD] = useState(null);
-  const [open, setOpen] = useState(defaultOpen);
-  useEffect(() => {
-    setD(null);
-    api.get(endpoint).then((r) => setD(r.data)).catch(() => setD({ invoices: [], payments: [] }));
-  }, [endpoint]);
+  const [open, setOpen] = useState(defaultOpen || Boolean(parentChildId));
+  const load = useCallback(() => api.get(endpoint).then((r) => setD(r.data)).catch(() => setD({ invoices: [], payments: [], proofs: [], issues: [] })), [endpoint]);
+  useEffect(() => { setD(null); load(); }, [load]);
   const s = d?.summary;
   return (
     <div className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm" data-testid={testid}>
       <div className="px-6 pt-5 pb-4 flex items-center justify-between gap-3">
         <h3 className="font-heading font-bold text-slate-900 dark:text-white flex items-center gap-2"><Wallet size={17} className="text-emerald-600" /> Fees</h3>
+        {d?.invoices.length > 0 && parentChildId && (
+          <button onClick={() => downloadBlob(`/parent/child/${parentChildId}/fees/statement.pdf`, "fee-statement.pdf")} className="text-xs font-semibold text-slate-600 dark:text-slate-300 flex items-center gap-1 ml-auto" data-testid={`${testid}-statement`}><FileText size={13} /> Statement</button>
+        )}
         {d?.invoices.length > 0 && (
           <button onClick={() => setOpen((o) => !o)} className="text-xs font-semibold text-indigo-600 flex items-center gap-1" data-testid={`${testid}-toggle`}>
             {open ? "Hide details" : "View details"} <ChevronDown size={13} className={open ? "rotate-180" : ""} />
@@ -41,18 +43,27 @@ export default function StudentFees({ endpoint, testid = "fees-card", defaultOpe
       {open && d && (
         <div className="border-t border-slate-100 dark:border-slate-800 px-6 py-4 space-y-4" data-testid={`${testid}-details`}>
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-            {d.invoices.map((i) => (
-              <li key={i.id} className="py-2.5 flex items-center justify-between gap-3 text-sm" data-testid={`${testid}-invoice-${i.id}`}>
+            {d.invoices.map((i) => {
+              const proofs = (d.proofs || []).filter((p) => p.invoice_id === i.id);
+              const issues = (d.issues || []).filter((x) => x.invoice_id === i.id);
+              const pending = proofs[0]?.status === "pending";
+              return (
+              <li key={i.id} className="py-2.5 text-sm" data-testid={`${testid}-invoice-${i.id}`}>
+                <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p className="font-medium text-slate-800 dark:text-slate-100">{i.period_label} <span className="text-xs text-slate-400">· due {i.due_date}</span></p>
                   <p className="text-xs text-slate-500 truncate">{i.items.map((x) => x.title).join(", ")}{i.discount_amount ? ` · discount ${inr(i.discount_amount)}` : ""}{i.fine_amount ? ` · late fee ${inr(i.fine_amount)}` : ""}</p>
                 </div>
                 <div className="text-right shrink-0">
-                  <p className="font-semibold text-slate-800 dark:text-slate-100">{inr(i.amount_due)}</p>
-                  <StatusChip status={i.status} />
+                  <p className="font-semibold text-slate-800 dark:text-slate-100 tabular-nums">{inr(i.amount_due)}</p>
+                  {i.balance > 0 && i.paid_amount > 0 && <p className="text-[11px] text-slate-500 tabular-nums">balance {inr(i.balance)}</p>}
+                  <StatusChip status={pending ? "verification_pending" : i.status} testid={`${testid}-invoice-status-${i.id}`} />
                 </div>
+                </div>
+                {parentChildId && (i.balance > 0 || proofs.length > 0 || issues.length > 0) && <InvoicePay inv={i} proofs={proofs} issues={issues} onChanged={load} />}
               </li>
-            ))}
+              );
+            })}
           </ul>
           {d.payments.length > 0 && (
             <div>
@@ -60,7 +71,7 @@ export default function StudentFees({ endpoint, testid = "fees-card", defaultOpe
               <ul className="divide-y divide-slate-100 dark:divide-slate-800">
                 {d.payments.map((p) => (
                   <li key={p.id} className="py-2 flex items-center justify-between text-sm">
-                    <span className="text-slate-700 dark:text-slate-200">{p.receipt_no} <span className="text-xs text-slate-400">· {p.period_label} · {(p.collected_at || "").slice(0, 10)} · {p.method.toUpperCase()}</span></span>
+                    <span className="text-slate-700 dark:text-slate-200">{p.receipt_no} <span className="text-xs text-slate-400">· {p.period_label} · {p.paid_on || (p.collected_at || "").slice(0, 10)} · {p.method.toUpperCase()}</span></span>
                     <span className="flex items-center gap-3"><b>{inr(p.amount)}</b>
                       <button onClick={() => printReceiptById(p.id)} className="text-indigo-600" title="Print receipt" data-testid={`${testid}-receipt-${p.id}`}><Printer size={15} /></button>
                       <button onClick={() => downloadReceiptPdf(p.id, p.receipt_no)} className="text-emerald-600" title="Download PDF" data-testid={`${testid}-receipt-pdf-${p.id}`}><FileDown size={15} /></button></span>

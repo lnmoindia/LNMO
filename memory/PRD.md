@@ -670,3 +670,21 @@ User-confirmed rules: same-section default (8-A→9-A) with per-student override
   - One shared formatter for currency (₹ + en-IN grouping, always 2 decimals, `−₹` for negatives), percentages (1 decimal) and counts. S.No is centred. A4 portrait via `@page`; each sample is 1 page.
   - Receipt PDF: bundled FreeSans (GPL with font exception) in backend/assets/fonts (it has ₹ and tabular digits), size 9 for every amount row (totals bold, same size), and `_inr()` with Indian grouping. Invoice total and balance moved into right-aligned rows. Falls back to Helvetica with "Rs." if the font is missing.
   - Before/after renders are in /app/tests/print_render (gen.mjs + shot.py).
+- Phase 51 (2026-10-13): UPI QR, payment proofs and offline collection improvements. Offline only, no payment gateway.
+  - UPI settings: institutions.upi, edited with GET/PUT /api/fees/upi-settings. Admin can edit (VPA validated, audit-logged); principals can only read.
+  - QR: a upi://pay URI (pa/pn/am=current balance/cu/tn/tr) rendered as a segno PNG data-URI. It is attached to each unpaid invoice in the parent/student fees payload and in GET /api/fees/invoices/{id}/pay-info, which also feeds the invoice print view.
+  - Proofs:
+    - POST /api/parent/fees/invoices/{id}/proofs (multipart, image ≤5 MB stored in object storage).
+    - Staff: GET /api/fees/proofs (with /stats and /{id}/file), plus /{id}/approve and /{id}/reject. Approve uses the same _create_fee_payment path as counter collection.
+    - One pending proof per invoice (unique partial index). Duplicate UTRs produce a warning only.
+  - Issues: fee_issues threads.
+    - Parent: POST /api/parent/fees/invoices/{id}/issues and /api/parent/fees/issues/{id}/messages.
+    - Staff: GET /api/fees/issues, plus /{id}/reply, /{id}/status and /{id}/record-payment; attachments via /{id}/messages/{mid}/file.
+  - Payment date:
+    - FeePaymentIn.paid_on: no future dates; not before the academic_years start_date, except that today is always allowed.
+    - Stored as paid_on (institution timezone), recorded_at and backdated. Backdated entries are audit-logged with both dates.
+    - Day Book and Monthly Summary group by paid_on. Legacy payments were backfilled additively at startup (13 LPGS rows; collected_at untouched).
+  - Principals: collect, reverse, approve and reject are allowed within their divisions (_require_collect_scope).
+  - Statement: GET /api/fees/students/{sid}/statement and statement.pdf (staff), and /api/parent/child/{sid}/fees/statement.pdf (parent). A4, ReportLab platypus, FreeSans.
+  - Badges: proofs + issues count on the Fees sidebar item and the "Payment proofs" tab.
+  - Backlog: show a HEIC preview (the browser can't render it; it opens as a file); add a timezone setting to the UI; a parent notification when the school replies; object-storage cleanup for rejected proofs (kept on purpose, no deletes).

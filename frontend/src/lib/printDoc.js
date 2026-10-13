@@ -261,7 +261,7 @@ export function printFeeReceipt({ payment: p, invoice: inv, school, admission_no
   const stamp = p.reversed ? `<div style="position:fixed;top:40%;left:12%;font-size:72px;color:rgba(220,38,38,.18);transform:rotate(-20deg);font-weight:bold">REVERSED</div>` : "";
   const body = `${stamp}
     ${feeHead(school, esc(school.address || ""), `<div style="font-size:16px;font-weight:bold;letter-spacing:.08em">FEE RECEIPT</div>
-      <div class="badge">No. <b>${esc(p.receipt_no)}</b></div><div class="muted">${esc((p.collected_at || "").slice(0, 10))}</div>`, 54)}
+      <div class="badge">No. <b>${esc(p.receipt_no)}</b></div><div class="muted">${esc(p.paid_on || (p.collected_at || "").slice(0, 10))}</div>`, 54)}
     <table style="margin-top:14px"><tr><th>Student</th><td>${esc(p.student_name)}</td><th>Admission no.</th><td>${esc(admission_no || "—")}</td></tr>
       <tr><th>Class</th><td>${esc(p.class_name || "")}${p.section ? ` ${esc(p.section)}` : ""}</td><th>Period</th><td>${esc(p.period_label || "")}${p.academic_year && !(p.period_label || "").includes(p.academic_year) ? ` · ${esc(p.academic_year)}` : ""}</td></tr></table>
     <table><tr><th>Fee head</th><th class="num">Amount</th></tr>${items}${extra}
@@ -278,11 +278,11 @@ export function printFeeReceipt({ payment: p, invoice: inv, school, admission_no
 export function printDayBook(d) {
   const grp = (title, rows, upper = false) => `<table style="width:32%;display:inline-table;margin-right:1%;vertical-align:top"><tr><th>${title}</th><th class="num">Count</th><th class="num">Total</th></tr>
     ${rows.map((r) => `<tr><td>${esc(upper ? String(r.key).toUpperCase() : r.key)}</td><td class="num">${cnt(r.count)}</td><td class="num">${inr(r.total)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">None</td></tr>`}</table>`;
-  const pays = d.payments.map((p, i) => `<tr><td class="sno">${i + 1}</td><td>${esc(p.receipt_no)}</td><td>${esc((p.collected_at || "").slice(11, 16))}</td><td>${esc(p.student_name)}</td><td>${esc(p.class_name || "")} ${esc(p.section || "")}</td><td>${esc(p.period_label || "")}</td><td>${esc(p.method.toUpperCase())}${p.reference ? ` · ${esc(p.reference)}` : ""}</td><td>${esc(p.collected_by || "")}</td><td class="num">${inr(p.amount)}</td></tr>`).join("");
+  const pays = d.payments.map((p, i) => `<tr><td class="sno">${i + 1}</td><td>${esc(p.receipt_no)}</td><td>${esc(p.backdated ? "backdated" : (p.time_local || ""))}</td><td>${esc(p.student_name)}</td><td>${esc(p.class_name || "")} ${esc(p.section || "")}</td><td>${esc(p.period_label || "")}</td><td>${esc(p.method.toUpperCase())}${p.reference ? ` · ${esc(p.reference)}` : ""}</td><td>${esc(p.collected_by || "")}</td><td class="num">${inr(p.amount)}</td></tr>`).join("");
   const rev = d.reversed.length ? `<p class="foot">Excluded — reversed: ${d.reversed.map((p) => `${esc(p.receipt_no)} (${inr(p.amount)})`).join(", ")}</p>` : "";
   const body = `${feeHead(d.school, "Daily collection report (day book)", `<div class="badge">${esc(d.date)}</div><div class="kpi">${inr(d.summary.total)}</div><div class="muted">${cnt(d.summary.count)} receipts</div>`)}
     <div style="margin-top:12px">${grp("Method", d.by_method, true)}${grp("Collector", d.by_collector)}${grp("Class", d.by_class)}</div>
-    <table><tr><th class="sno">S.No</th><th>Receipt</th><th>Time (UTC)</th><th>Student</th><th>Class</th><th>Period</th><th>Method</th><th>Collector</th><th class="num">Amount</th></tr>${pays || `<tr><td colspan="9" class="muted">No collections on this date.</td></tr>`}
+    <table><tr><th class="sno">S.No</th><th>Receipt</th><th>Time</th><th>Student</th><th>Class</th><th>Period</th><th>Method</th><th>Collector</th><th class="num">Amount</th></tr>${pays || `<tr><td colspan="9" class="muted">No collections on this date.</td></tr>`}
       <tr class="totals"><td colspan="8">Total collected</td><td class="num">${inr(d.summary.total)}</td></tr></table>${rev}
     <div class="sig"><span>Prepared by</span><span>Verified by (Principal / Accountant)</span></div>`;
   feeDoc(`Day book ${d.date}`, body);
@@ -311,4 +311,28 @@ export function printMonthlySummary(d) {
     <p class="foot">Billed = invoices due this month, net of concessions/waivers (shown separately, excluded from dues). Collected = all receipts dated this month (equals the sum of daily Day Books; reversed receipts excluded${d.reversed.count ? `: ${cnt(d.reversed.count)} · ${inr(d.reversed.amount)}` : ""}); "of which prev. dues" = the part received against invoices due before this month, including carried-forward Previous dues. Outstanding and Collection % = this month's billing only.${d.totals.carried_forward ? ` Carried forward to next year: ${inr(d.totals.carried_forward)}.` : ""}</p>
     <div class="sig"><span>Accountant</span><span>Principal</span></div>`;
   feeDoc(`Monthly fee summary ${d.month}`, body);
+}
+
+export function printInvoice({ invoice: inv, school, admission_no, upi }) {
+  const items = (inv.items || []).map((i) => `<tr><td>${esc(i.title)}</td><td class="num">${inr(i.amount)}</td></tr>`).join("");
+  const extra = [
+    inv.discount_amount ? `<tr><td>Concession / discount</td><td class="num">${inr(-inv.discount_amount)}</td></tr>` : "",
+    inv.fine_amount ? `<tr><td>Late fee</td><td class="num">${inr(inv.fine_amount)}</td></tr>` : "",
+  ].join("");
+  const pay = upi ? `<div style="display:flex;gap:16px;align-items:center;margin-top:16px;border:1px solid #cbd5e1;border-radius:8px;padding:12px">
+      <img src="${upi.qr}" alt="UPI QR" style="width:150px;height:150px" />
+      <div style="font-size:11px;line-height:1.6"><div style="font-size:13px;font-weight:bold">Scan to pay ${inr(upi.amount)} with any UPI app</div>
+        <div>UPI ID: <b>${esc(upi.vpa)}</b> · Payee: ${esc(upi.payee_name || "")}</div><div>Note: ${esc(upi.note)}</div>
+        ${upi.instructions ? `<div class="muted">${esc(upi.instructions)}</div>` : ""}
+        <div class="muted">After paying, upload the screenshot in the parent portal ("I've paid") so the school can issue a receipt.</div></div></div>` : "";
+  const body = `${feeHead(school, esc(school.address || ""), `<div style="font-size:16px;font-weight:bold;letter-spacing:.08em">FEE INVOICE</div>
+      <div class="badge">${esc(inv.period_label)} · ${esc(inv.academic_year || "")}</div><div class="muted">Due ${esc(inv.due_date || "—")}</div>`, 54)}
+    <table style="margin-top:14px"><tr><th>Student</th><td>${esc(inv.student_name)}</td><th>Admission no.</th><td>${esc(admission_no || "—")}</td></tr>
+      <tr><th>Class</th><td>${esc(inv.class_name || "")} ${esc(inv.section || "")}</td><th>Status</th><td>${esc(String(inv.status).replace("_", " "))}</td></tr></table>
+    <table><tr><th>Fee head</th><th class="num">Amount</th></tr>${items}${extra}
+      <tr class="totals"><td>Invoice total</td><td class="num">${inr(inv.amount_due)}</td></tr>
+      <tr><td>Paid so far</td><td class="num">${inr(inv.paid_amount)}</td></tr>
+      <tr class="totals"><td>Balance due</td><td class="num">${inr(inv.balance)}</td></tr></table>${pay}
+    <p class="muted" style="margin-top:18px">This is a system-generated invoice.</p>`;
+  feeDoc(`Invoice ${inv.student_name} ${inv.period_label}`, body);
 }

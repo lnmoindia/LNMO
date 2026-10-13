@@ -29,7 +29,7 @@ export default function ReceiptsTab({ readOnly }) {
             {rows?.map((p) => (
               <tr key={p.id} data-testid={`fee-receipt-row-${p.receipt_no}`}>
                 <td className="px-4 py-2 font-medium">{p.receipt_no} {p.reversed && <StatusChip status="reversed" />}</td>
-                <td>{(p.collected_at || "").slice(0, 10)}</td><td>{p.student_name} <span className="text-xs text-slate-400">{p.class_name} {p.section}</span></td>
+                <td>{p.paid_on || (p.collected_at || "").slice(0, 10)}</td><td>{p.student_name} <span className="text-xs text-slate-400">{p.class_name} {p.section}</span></td>
                 <td>{p.period_label}</td><td>{p.method.toUpperCase()}{p.reference ? <span className="text-xs text-slate-400"> {p.reference}</span> : null}</td>
                 <td className={`text-right font-semibold ${p.reversed ? "line-through text-slate-400" : ""}`}>{inr(p.amount)}</td>
                 <td className="pr-3 text-right whitespace-nowrap">

@@ -3,7 +3,7 @@ Throwaway DB, STUB comm provider.
 """
 import sys
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import pytest
 
 sys.path.insert(0, "/app/backend")
@@ -153,7 +153,8 @@ def test_day_book_grouping(ctx):
             for i, a, m in [(ia, 200, "cash"), (ia, 100, "upi"), (ib, 150, "upi"), (ic, 300, "cheque")]]
     admin.post(f"/api/fees/payments/{pays[0]['id']}/reverse", json={"reason": "Wrong amount"})
     db.fee_payments.update_one({"id": pays[3]["id"]}, {"$set": {"collected_by": "Clerk Two"}})
-    today = date.today().isoformat()
+    from zoneinfo import ZoneInfo
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()  # Phase 51: day book = institution tz (IST)
     d = admin.get("/api/fees/day-book", params={"date": today}).json()
     assert d["summary"] == {"total": 550, "count": 3, "reversed_count": 1, "reversed_amount": 200}
     assert {m["key"]: (m["total"], m["count"]) for m in d["by_method"]} == {"upi": (250, 2), "cheque": (300, 1)}

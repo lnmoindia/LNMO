@@ -1,6 +1,6 @@
 import { toast } from "sonner";
 import api, { errText } from "./api";
-import { printFeeReceipt } from "./printDoc";
+import { printFeeReceipt, printInvoice } from "./printDoc";
 
 export const inr = (n) => `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 
@@ -11,10 +11,15 @@ const TONE = {
   overdue: "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400",
   reversed: "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400",
   carried_forward: "bg-violet-50 text-violet-700 dark:bg-violet-500/10 dark:text-violet-400",
+  approved: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400",
+  rejected: "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400",
+  open: "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400",
+  resolved: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400",
+  verification_pending: "bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-300",
 };
 
 export const StatusChip = ({ status, testid }) => (
-  <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold capitalize ${TONE[status] || TONE.pending}`} data-testid={testid}>{String(status).replace("_", " ")}</span>
+  <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold capitalize ${TONE[status] || TONE.pending}`} data-testid={testid}>{String(status).replaceAll("_", " ")}</span>
 );
 
 export const FREQ_LABEL = { annual: "Annual", term: "Per term", monthly: "Monthly", one_time: "One-time", arrears: "Arrears" };
@@ -36,3 +41,21 @@ export const downloadReceiptPdf = async (pid, receiptNo) => {
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   } catch (e) { toast.error(errText(e)); }
 };
+
+export const downloadBlob = async (url, filename) => {
+  try {
+    const { data } = await api.get(url, { responseType: "blob" });
+    const href = URL.createObjectURL(data);
+    const a = document.createElement("a");
+    a.href = href; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 2000);
+  } catch (e) { toast.error(errText(e)); }
+};
+
+export const printInvoiceById = async (invId) => {
+  try { const { data } = await api.get(`/fees/invoices/${invId}/pay-info`); printInvoice(data); }
+  catch (e) { toast.error(errText(e)); }
+};
+
+export const localToday = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);

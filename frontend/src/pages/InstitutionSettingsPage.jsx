@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Skeleton } from "../components/ui/skeleton";
+import { UpiCard } from "./UpiSettingsCard";
 
 const FIELDS = [
   { name: "name", label: "Institution name" },
@@ -214,6 +215,7 @@ export default function InstitutionSettingsPage() {
 
       <LogoCard />
       <SealCard />
+      <UpiCard />
     </div>
   );
 }

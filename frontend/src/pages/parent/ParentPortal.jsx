@@ -222,7 +222,7 @@ export default function ParentPortal() {
               <AssignmentsList items={asg} />
             </Card>
 
-            <StudentFees key={selected} endpoint={`/parent/child/${selected}/fees`} testid="parent-fees" defaultOpen={new URLSearchParams(window.location.search).get("fees") === "1"} />
+            <StudentFees key={selected} endpoint={`/parent/child/${selected}/fees`} testid="parent-fees" parentChildId={selected} defaultOpen={new URLSearchParams(window.location.search).get("fees") === "1"} />
 
             <Card title="Results" icon={Award} testid="parent-results">
               {snap.results.length === 0 ? <Empty text="No published results yet." /> : (

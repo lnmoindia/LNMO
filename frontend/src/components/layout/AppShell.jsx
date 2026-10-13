@@ -66,6 +66,11 @@ export default function AppShell({ nav, consoleLabel }) {
         api.get("/support/issues/stats")
           .then(({ data }) => setBadges({ "/platform/issues": data.open_issues }))
           .catch(() => {}));
+    } else if (user?.role === "institution_admin" || user?.role === "teacher") {
+      import("../../lib/api").then(({ default: api }) =>
+        api.get("/fees/proofs/stats")
+          .then(({ data }) => setBadges({ "/app/fees": data.total }))
+          .catch(() => {}));
     }
   }, [user?.role]);
 

@@ -11123,6 +11123,7 @@ class FeePaymentIn(_BM):
     method: Literal["cash", "upi", "cheque", "bank", "other"]
     reference: Optional[str] = _F(default=None, max_length=80)
     note: Optional[str] = _F(default=None, max_length=300)
+    paid_on: Optional[str] = _F(default=None, max_length=10)  # Phase 51: payment date (institution tz); default today
 
 
 class FeeReverseIn(_BM):
@@ -11490,13 +11491,56 @@ async def _refresh_invoice_status(inv_id, late):
 
 
 @api.post("/fees/payments")
-async def record_fee_payment(body: FeePaymentIn, user: dict = Depends(require_fee_admin)):
+async def record_fee_payment(body: FeePaymentIn, user: dict = Depends(require_admin_or_principal)):
+    """Offline collection — admin, or a principal for students in their divisions (Phase 51)."""
+    return await _create_fee_payment(user, body.invoice_id, body.amount, body.method, body.reference, body.note, body.paid_on)
+
+
+async def _inst_tz(iid):
+    from zoneinfo import ZoneInfo
+    inst = await db.institutions.find_one({"id": iid}, {"_id": 0, "timezone": 1}) or {}
+    try:
+        return ZoneInfo(inst.get("timezone") or "Asia/Kolkata")
+    except Exception:
+        return ZoneInfo("Asia/Kolkata")
+
+
+async def _require_collect_scope(user, class_name):
+    if user.get("role") == "institution_admin":
+        return
+    if not await active_principal(user):
+        raise HTTPException(status_code=403, detail="Only the school office or a principal can do this")
+    sc = await _fee_scope(user)
+    if sc is not None and class_name not in sc[0]:
+        raise HTTPException(status_code=403, detail="This student is outside your divisions")
+
+
+async def _validate_paid_on(iid, inv, paid_on):
+    today = await _inst_today(iid)
+    d = (paid_on or "").strip() or today
+    try:
+        datetime.strptime(d, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Payment date must be YYYY-MM-DD")
+    if d > today:
+        raise HTTPException(status_code=400, detail="Payment date cannot be in the future")
+    ay = await db.academic_years.find_one({"institution_id": iid, "name": inv.get("academic_year")}, {"_id": 0, "start_date": 1})
+    start = (ay or {}).get("start_date")
+    if start and d < start and d != today:  # today is always allowed (advance payment for a year not yet started)
+        raise HTTPException(status_code=400, detail=f"Payment date cannot be before the academic year start ({start})")
+    return d, today
+
+
+async def _create_fee_payment(user, invoice_id, amount, method, reference=None, note=None, paid_on=None, extra=None):
+    """The ONE payment path (counter collection, approved UPI proofs, issue resolutions)."""
     iid = user["institution_id"]
-    inv = await db.fee_invoices.find_one({"id": body.invoice_id, "institution_id": iid}, {"_id": 0})
+    inv = await db.fee_invoices.find_one({"id": invoice_id, "institution_id": iid}, {"_id": 0})
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    await _require_collect_scope(user, inv.get("class_name"))
     if inv.get("carried_forward_to"):
         raise HTTPException(status_code=409, detail="This balance was carried forward to the next year — collect it against the 'Previous dues' invoice")
+    paid_on, today = await _validate_paid_on(iid, inv, paid_on)
     late = None if inv.get("is_arrears") else (await _get_structure(iid, inv["structure_id"])).get("late_fee")
     fine = _fine_for(inv, late, _today())
     if fine > 0:  # late fine is fixed onto the invoice (once) when a payment is recorded after grace
@@ -11504,10 +11548,12 @@ async def record_fee_payment(body: FeePaymentIn, user: dict = Depends(require_fe
                                          {"$set": {"fine_applied": True, "fine_applied_at": now_iso()}, "$inc": {"fine_amount": fine}})
         inv = await db.fee_invoices.find_one({"id": inv["id"]}, {"_id": 0})
     due = _r2(inv["total"] + inv.get("fine_amount", 0))
-    amount = _r2(body.amount)
+    amount = _r2(amount)
     balance = _r2(due - inv.get("paid_amount", 0))
     if balance <= 0:
         raise HTTPException(status_code=400, detail="This invoice is already fully paid")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be more than zero")
     if amount > balance:
         raise HTTPException(status_code=400, detail=f"Amount exceeds the balance due (₹{balance:,.2f})")
     guard = await db.fee_invoices.find_one_and_update(
@@ -11515,28 +11561,36 @@ async def record_fee_payment(body: FeePaymentIn, user: dict = Depends(require_fe
         return_document=ReturnDocument.AFTER)
     if not guard:
         raise HTTPException(status_code=409, detail="The invoice changed while recording — refresh and try again")
+    now = now_iso()
+    backdated = paid_on != today
+    collected_at = now if not backdated else \
+        datetime.strptime(paid_on + " 12:00", "%Y-%m-%d %H:%M").replace(tzinfo=await _inst_tz(iid)).astimezone(timezone.utc).isoformat()
     pay = {"id": str(uuid.uuid4()), "institution_id": iid, "invoice_id": inv["id"], "account_id": inv["account_id"],
            "student_id": inv["student_id"], "student_name": inv.get("student_name"), "class_name": inv.get("class_name"),
            "section": inv.get("section"), "period_label": inv.get("period_label"), "academic_year": inv.get("academic_year"),
-           "items": inv.get("items"), "amount": amount, "method": body.method, "reference": body.reference, "note": body.note,
+           "items": inv.get("items"), "amount": amount, "method": method, "reference": reference, "note": note,
            "receipt_no": await _next_receipt_no(iid, inv.get("academic_year")),
            "collected_by": user.get("name") or user.get("email"), "collected_by_email": user.get("email"),
-           "collected_at": now_iso(), "reversed": False}
+           "collected_by_role": "principal" if user.get("role") != "institution_admin" else "admin",
+           "collected_at": collected_at, "paid_on": paid_on, "recorded_at": now, "backdated": backdated,
+           "reversed": False, **(extra or {})}
     await db.fee_payments.insert_one(dict(pay))
     view = await _refresh_invoice_status(inv["id"], late)
     await audit(user, "fee_payment", "fee_payments", pay["id"],
-                f"{pay['receipt_no']} · ₹{amount:,.2f} {body.method} · {pay['student_name']}", iid)
+                f"{pay['receipt_no']} · ₹{amount:,.2f} {method} · {pay['student_name']}"
+                + (f" · BACKDATED payment date {paid_on}, recorded {now[:10]}" if backdated else ""), iid)
     pay.pop("_id", None)
     return {"payment": pay, "invoice": view}
 
 
 @api.post("/fees/payments/{pid}/reverse")
-async def reverse_fee_payment(pid: str, body: FeeReverseIn, user: dict = Depends(require_fee_admin)):
+async def reverse_fee_payment(pid: str, body: FeeReverseIn, user: dict = Depends(require_admin_or_principal)):
     """Credit-note style reversal: the payment is flagged (never deleted) and the invoice balance restored."""
     iid = user["institution_id"]
     p = await db.fee_payments.find_one({"id": pid, "institution_id": iid}, {"_id": 0})
     if not p:
         raise HTTPException(status_code=404, detail="Payment not found")
+    await _require_collect_scope(user, p.get("class_name"))
     res = await db.fee_payments.update_one({"id": pid, "reversed": False}, {"$set": {
         "reversed": True, "reversed_by": user.get("email"), "reversed_at": now_iso(),
         "reverse_reason": body.reason.strip(), "credit_note_no": f"CN-{p['receipt_no']}"}})
@@ -11678,7 +11732,7 @@ def _receipt_pdf(d, logo_bytes=None) -> bytes:
     c.setFont(R, 8.5); c.drawString(tx, y - 5 * mm, (school.get("address") or "")[:90])
     c.setFont(B, 12); c.drawRightString(w - x0, y, "FEE RECEIPT")
     c.setFont(R, SZ); c.drawRightString(w - x0, y - 5 * mm, f"No. {p['receipt_no']}")
-    c.drawRightString(w - x0, y - 9.5 * mm, f"Date: {(p.get('collected_at') or '')[:10]}")
+    c.drawRightString(w - x0, y - 9.5 * mm, f"Date: {p.get('paid_on') or (p.get('collected_at') or '')[:10]}")
     y -= 14 * mm; c.line(x0, y, w - x0, y); y -= 7 * mm
     c.setFont(R, SZ)
     cls = f"{p.get('class_name') or ''} {p.get('section') or ''}".strip()
@@ -11808,13 +11862,7 @@ async def _send_fee_reminder(inv, rtype, source, today, cfg, actor=None):
 
 async def _inst_today(iid):
     """Calendar date in the institution's timezone (fallback Asia/Kolkata) — the fee-reminder day boundary."""
-    from zoneinfo import ZoneInfo
-    inst = await db.institutions.find_one({"id": iid}, {"_id": 0, "timezone": 1}) or {}
-    try:
-        tz = ZoneInfo(inst.get("timezone") or "Asia/Kolkata")
-    except Exception:
-        tz = ZoneInfo("Asia/Kolkata")
-    return datetime.now(tz).date().isoformat()
+    return datetime.now(await _inst_tz(iid)).date().isoformat()
 
 
 async def _fee_reminder_sweep(today=None, only_iid=None):
@@ -11922,16 +11970,19 @@ async def public_fee_link(token: str):
 @api.get("/fees/day-book")
 async def fee_day_book(date: str = "", user: dict = Depends(require_admin_or_principal)):
     iid = user["institution_id"]
-    day = date or _today()
+    day = date or await _inst_today(iid)
     try:
         datetime.strptime(day, "%Y-%m-%d")
     except ValueError:
         raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
-    f = {"institution_id": iid, "collected_at": {"$gte": day, "$lt": day + "T99"}}
+    f = {"institution_id": iid, "paid_on": day}  # Phase 51: payment date in the institution timezone
     scope = await _fee_scope(user)
     if scope is not None:
         f["class_name"] = {"$in": list(scope[0])}
     rows = await db.fee_payments.find(f, {"_id": 0, "items": 0}).sort("collected_at", 1).to_list(5000)
+    tz = await _inst_tz(iid)
+    for p in rows:
+        p["time_local"] = None if p.get("backdated") else datetime.fromisoformat(p["collected_at"]).astimezone(tz).strftime("%H:%M")
     live = [p for p in rows if not p.get("reversed")]
     rev = [p for p in rows if p.get("reversed")]
 
@@ -11945,7 +11996,7 @@ async def fee_day_book(date: str = "", user: dict = Depends(require_admin_or_pri
     by_class = group("class_name")
     by_class.sort(key=lambda e: (int(re.search(r"\d+", e["key"]).group()) if re.search(r"\d+", e["key"]) else 999, e["key"]))
     school = await db.institutions.find_one({"id": iid}, {"_id": 0, "name": 1})
-    return {"date": day, "school": {"name": (school or {}).get("name"), "logo_src": await _school_logo_src(iid)},
+    return {"date": day, "timezone": str(tz), "school": {"name": (school or {}).get("name"), "logo_src": await _school_logo_src(iid)},
             "summary": {"total": _r2(sum(p["amount"] for p in live)), "count": len(live),
                         "reversed_count": len(rev), "reversed_amount": _r2(sum(p["amount"] for p in rev))},
             "by_method": group("method"), "by_collector": group("collected_by"), "by_class": by_class,
@@ -11954,12 +12005,19 @@ async def fee_day_book(date: str = "", user: dict = Depends(require_admin_or_pri
 
 async def _student_fees(iid, sid):
     invs = await db.fee_invoices.find({"institution_id": iid, "student_id": sid}, {"_id": 0}).sort("due_date", 1).to_list(500)
-    late = await _late_map({i["structure_id"] for i in invs})
-    views = [_invoice_view(i, late.get(i["structure_id"])) for i in invs]
+    late = await _late_map({i["structure_id"] for i in invs if i.get("structure_id")})
+    views = [_invoice_view(i, late.get(i.get("structure_id"))) for i in invs]
     pays = await db.fee_payments.find({"institution_id": iid, "student_id": sid, "reversed": False},
                                       {"_id": 0, "id": 1, "receipt_no": 1, "amount": 1, "method": 1, "period_label": 1,
-                                       "collected_at": 1}).sort("collected_at", -1).to_list(500)
-    return {"summary": _summarize(views), "invoices": views, "payments": pays}
+                                       "collected_at": 1, "paid_on": 1}).sort("collected_at", -1).to_list(500)
+    upi = await _upi_cfg(iid)
+    stu = await db.students.find_one({"id": sid}, {"_id": 0, "admission_no": 1}) or {}
+    for v in views:  # Phase 51: QR always encodes the CURRENT balance
+        v["upi"] = _upi_block(upi, v, stu.get("admission_no"))
+    proofs = await db.fee_payment_proofs.find({"institution_id": iid, "student_id": sid}, {"_id": 0}).sort("submitted_at", -1).to_list(200)
+    issues = await db.fee_issues.find({"institution_id": iid, "student_id": sid}, {"_id": 0}).sort("updated_at", -1).to_list(100)
+    return {"summary": _summarize(views), "invoices": views, "payments": pays, "proofs": proofs, "issues": issues,
+            "upi_enabled": bool(upi.get("enabled"))}
 
 
 @api.get("/parent/child/{student_id}/fees")
@@ -12243,12 +12301,12 @@ async def fee_monthly_summary(month: str = "", user: dict = Depends(require_admi
     """Per class: billed = invoices due in the month (net of concessions), collected = payments received in the month
     (same rule as the Day Book), outstanding = remaining balance of the month's invoices."""
     iid = user["institution_id"]
-    m = month or _today()[:7]
+    m = month or (await _inst_today(iid))[:7]
     if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", m):
         raise HTTPException(status_code=400, detail="month must be YYYY-MM")
     scope = await _fee_scope(user)
     iq = {"institution_id": iid, "due_date": {"$gte": f"{m}-01", "$lte": f"{m}-31"}, "is_arrears": {"$ne": True}}
-    pq = {"institution_id": iid, "collected_at": {"$gte": f"{m}-01", "$lt": f"{m}-32"}}
+    pq = {"institution_id": iid, "paid_on": {"$gte": f"{m}-01", "$lte": f"{m}-31"}}
     if scope is not None:
         iq["class_name"] = pq["class_name"] = {"$in": list(scope[0])}
     rows = {}
@@ -12284,7 +12342,7 @@ async def fee_monthly_summary(month: str = "", user: dict = Depends(require_admi
             r["prev_dues_collected"] = _r2(r["prev_dues_collected"] + p["amount"])
         e = methods.setdefault(p["method"], {"key": p["method"], "total": 0.0, "count": 0})
         e["total"] = _r2(e["total"] + p["amount"]); e["count"] += 1
-        d = daily.setdefault(p["collected_at"][:10], {"date": p["collected_at"][:10], "total": 0.0, "count": 0})
+        d = daily.setdefault(p["paid_on"], {"date": p["paid_on"], "total": 0.0, "count": 0})
         d["total"] = _r2(d["total"] + p["amount"]); d["count"] += 1
 
     def pct(r):
@@ -12301,6 +12359,591 @@ async def fee_monthly_summary(month: str = "", user: dict = Depends(require_admi
             "rows": out_rows, "totals": totals, "by_method": sorted(methods.values(), key=lambda e: -e["total"]),
             "daily": sorted(daily.values(), key=lambda d: d["date"]),
             "reversed": {"count": len(rev), "amount": _r2(sum(p["amount"] for p in rev))}}
+
+
+# ==================== PHASE 51: UPI QR, payment proofs, fee issues, statements (offline only — no gateway) ====================
+from urllib.parse import quote as _urlquote  # noqa: E402
+import segno as _segno  # noqa: E402
+
+UPI_VPA_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-_]{1,255}@[A-Za-z][A-Za-z0-9.\-]{1,63}$")
+PROOF_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif"}
+PROOF_EXT = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "heic": "image/heic", "heif": "image/heif"}
+PROOF_MAX = 5 * 1024 * 1024
+
+
+class UpiSettingsIn(_BM):
+    enabled: bool = False
+    vpa: str = _F(default="", max_length=320)
+    payee_name: str = _F(default="", max_length=60)
+    instructions: str = _F(default="", max_length=400)
+
+
+async def _upi_cfg(iid):
+    inst = await db.institutions.find_one({"id": iid}, {"_id": 0, "upi": 1}) or {}
+    return inst.get("upi") or {}
+
+
+def _upi_block(cfg, inv, admission_no):
+    """Standard upi://pay URI + QR for the invoice's CURRENT balance; None when disabled/paid/carried forward."""
+    if not (cfg or {}).get("enabled") or not cfg.get("vpa") or inv.get("balance", 0) <= 0 or inv.get("carried_forward_to"):
+        return None
+    ref = inv["id"].replace("-", "")[:8].upper()
+    adm = re.sub(r"[^A-Za-z0-9\-/]", "", admission_no or "")
+    note = f"Fee {adm} {ref}".replace("  ", " ").strip()[:50]
+    tr = re.sub(r"[^A-Za-z0-9]", "", f"{adm}{ref}")[:35]
+    amount = f"{inv['balance']:.2f}"
+    params = [("pa", cfg["vpa"]), ("pn", cfg.get("payee_name") or ""), ("am", amount), ("cu", "INR"), ("tn", note), ("tr", tr)]
+    uri = "upi://pay?" + "&".join(f"{k}={_urlquote(v, safe='@.-_')}" for k, v in params)
+    return {"uri": uri, "qr": _segno.make(uri, error="m").png_data_uri(scale=6, border=2), "amount": inv["balance"],
+            "vpa": cfg["vpa"], "payee_name": cfg.get("payee_name"), "instructions": cfg.get("instructions") or "",
+            "note": note, "ref": ref}
+
+
+@api.get("/fees/upi-settings")
+async def get_upi_settings(user: dict = Depends(require_admin_or_principal)):
+    return {"enabled": False, "vpa": "", "payee_name": "", "instructions": "", **(await _upi_cfg(user["institution_id"]))}
+
+
+@api.put("/fees/upi-settings")
+async def put_upi_settings(body: UpiSettingsIn, user: dict = Depends(require_fee_admin)):
+    iid = user["institution_id"]
+    vpa, payee = body.vpa.strip(), body.payee_name.strip()
+    if vpa and not UPI_VPA_RX.match(vpa):
+        raise HTTPException(status_code=400, detail="UPI ID must look like name@bank")
+    if body.enabled and (not vpa or not payee):
+        raise HTTPException(status_code=400, detail="UPI ID and payee name are required to enable UPI payments")
+    before = await _upi_cfg(iid)
+    new = {"enabled": body.enabled, "vpa": vpa, "payee_name": payee, "instructions": body.instructions.strip(),
+           "updated_by": user.get("email"), "updated_at": now_iso()}
+    await db.institutions.update_one({"id": iid}, {"$set": {"upi": new}})
+    await audit(user, "fee_upi_settings", "institutions", iid,
+                f"{before.get('enabled')}/{before.get('vpa')} → {new['enabled']}/{new['vpa']} · payee {payee}", iid)
+    return new
+
+
+async def _invoice_for(user, inv_id):
+    """Invoice + view with access rules: parent own child, student self, admin, principal in scope."""
+    iid = user.get("institution_id")
+    inv = await db.fee_invoices.find_one({"id": inv_id, "institution_id": iid}, {"_id": 0})
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    role = user.get("role")
+    if role == "parent":
+        if inv["student_id"] not in (user.get("student_ids") or []):
+            raise HTTPException(status_code=403, detail="This student is not linked to your account")
+    elif role == "student":
+        if inv["student_id"] != user.get("student_id"):
+            raise HTTPException(status_code=403, detail="Access denied")
+    else:
+        await _require_collect_scope(user, inv.get("class_name"))
+    late = None if not inv.get("structure_id") else (await _late_map({inv["structure_id"]})).get(inv["structure_id"])
+    return inv, _invoice_view(inv, late)
+
+
+@api.get("/fees/invoices/{inv_id}/pay-info")
+async def fee_invoice_pay_info(inv_id: str, user: dict = Depends(get_current_user)):
+    """Invoice print/pay view: current balance + UPI QR (when enabled) + any pending proof."""
+    inv, view = await _invoice_for(user, inv_id)
+    iid = inv["institution_id"]
+    stu = await db.students.find_one({"id": inv["student_id"]}, {"_id": 0, "admission_no": 1}) or {}
+    inst = await db.institutions.find_one({"id": iid}, {"_id": 0, "name": 1, "address": 1}) or {}
+    pending = await db.fee_payment_proofs.find_one({"invoice_id": inv_id, "status": "pending"}, {"_id": 0, "file_path": 0})
+    return {"invoice": view, "admission_no": stu.get("admission_no"), "upi": _upi_block(await _upi_cfg(iid), view, stu.get("admission_no")),
+            "pending_proof": pending, "school": {**inst, "logo_src": await _school_logo_src(iid)}}
+
+
+async def _utr_usage(iid, utr, exclude_proof=None):
+    if not utr:
+        return []
+    rx = {"$regex": f"^{re.escape(utr)}$", "$options": "i"}
+    hits = [{"kind": "payment", "receipt_no": p["receipt_no"], "student_name": p.get("student_name")}
+            async for p in db.fee_payments.find({"institution_id": iid, "reference": rx, "reversed": False},
+                                                {"_id": 0, "receipt_no": 1, "student_name": 1})]
+    hits += [{"kind": "proof", "status": p["status"], "student_name": p.get("student_name")}
+             async for p in db.fee_payment_proofs.find({"institution_id": iid, "utr": rx, "status": {"$ne": "rejected"},
+                                                        "id": {"$ne": exclude_proof}}, {"_id": 0, "status": 1, "student_name": 1})]
+    return hits
+
+
+async def _read_proof_file(file):
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else ""
+    ctype = file.content_type if file.content_type in PROOF_TYPES else PROOF_EXT.get(ext)
+    if not ctype:
+        raise HTTPException(status_code=400, detail="Please upload a JPG, PNG, HEIC or WEBP image")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The file is empty")
+    if len(data) > PROOF_MAX:
+        raise HTTPException(status_code=400, detail="Image must be 5 MB or smaller")
+    return data, ctype
+
+
+def _store_fee_file(iid, key, data, ctype):
+    path = f"lnmo/fee-proofs/{iid}/{key}.{PROOF_TYPES[ctype]}"
+    try:
+        return _put_object(path, data, ctype)["path"]
+    except Exception:
+        raise HTTPException(status_code=502, detail="File storage is unavailable right now — try again shortly")
+
+
+async def _fee_parent_notify(iid, student_id, title, text, related_id, actor=None):
+    """Bell to linked parents + WhatsApp/SMS via the comm engine (STUB mode in this environment)."""
+    parents = await db.users.find({"institution_id": iid, "role": "parent", "student_ids": student_id},
+                                  {"_id": 0, "id": 1, "phone": 1, "name": 1}).to_list(10)
+    for p in parents:
+        await _notify(iid, p["id"], "fee_payment_proof", title, text, related_id)
+    stu = await db.students.find_one({"id": student_id}, {"_id": 0, "guardian_phone": 1, "guardian_name": 1}) or {}
+    phone = _norm_phone(stu.get("guardian_phone")) or next((p["phone"] for p in parents if p.get("phone")), None)
+    if phone:
+        cfg = await _fee_reminder_cfg(iid)
+        try:
+            await send_message(iid, cfg["channel"], [{"name": stu.get("guardian_name") or "Parent", "phone": phone,
+                                                      "student_id": student_id, "body": f"{title}. {text}"}],
+                               body=f"{title}. {text}", module="fee_proof", actor=actor)
+        except HTTPException:
+            pass
+
+
+@api.post("/parent/fees/invoices/{inv_id}/proofs")
+async def submit_fee_proof(inv_id: str, file: UploadFile = File(...), amount: float = Form(...), paid_on: str = Form(...),
+                           utr: str = Form(""), note: str = Form(""), user: dict = Depends(require_roles("parent"))):
+    inv, view = await _invoice_for(user, inv_id)
+    iid = inv["institution_id"]
+    if view["balance"] <= 0:
+        raise HTTPException(status_code=400, detail="This invoice has no balance due")
+    amount = _r2(amount)
+    if amount <= 0 or amount > view["balance"]:
+        raise HTTPException(status_code=400, detail=f"Amount must be more than 0 and at most the balance (₹{view['balance']:,.2f})")
+    try:
+        datetime.strptime(paid_on, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Payment date must be YYYY-MM-DD")
+    if paid_on > await _inst_today(iid):
+        raise HTTPException(status_code=400, detail="Payment date cannot be in the future")
+    utr = re.sub(r"\s", "", utr or "")
+    if utr and not re.fullmatch(r"[A-Za-z0-9\-]{6,40}", utr):
+        raise HTTPException(status_code=400, detail="UTR / transaction ID should be 6–40 letters or digits")
+    if await db.fee_payment_proofs.find_one({"invoice_id": inv_id, "status": {"$in": ["pending", "approving"]}}, {"_id": 1}):
+        raise HTTPException(status_code=409, detail="A payment proof for this invoice is already awaiting verification")
+    data, ctype = await _read_proof_file(file)
+    dup = await _utr_usage(iid, utr)
+    pid = str(uuid.uuid4())
+    doc = {"id": pid, "institution_id": iid, "invoice_id": inv_id, "account_id": inv.get("account_id"), "student_id": inv["student_id"],
+           "student_name": inv.get("student_name"), "class_name": inv.get("class_name"), "section": inv.get("section"),
+           "period_label": inv.get("period_label"), "academic_year": inv.get("academic_year"), "amount": amount, "utr": utr or None,
+           "paid_on": paid_on, "note": (note or "").strip()[:300] or None,
+           "file_path": _store_fee_file(iid, pid, data, ctype), "file_type": ctype, "file_size": len(data),
+           "status": "pending", "utr_duplicate": dup, "submitted_by": user["id"], "submitted_by_name": user.get("name"),
+           "submitted_at": now_iso()}
+    try:
+        await db.fee_payment_proofs.insert_one(dict(doc))
+    except DuplicateKeyError:
+        raise HTTPException(status_code=409, detail="A payment proof for this invoice is already awaiting verification")
+    await _notify_managers(iid, "fee_payment_proof", f"Payment proof: {doc['student_name']}",
+                           f"₹{amount:,.2f} · {doc['period_label']} · UTR {utr or '—'}", pid, class_names=[inv.get("class_name")])
+    await audit(user, "fee_proof_submit", "fee_payment_proofs", pid, f"{doc['student_name']} · ₹{amount:,.2f} · UTR {utr or '—'}", iid)
+    doc.pop("file_path")
+    return {"proof": doc, "utr_warning": dup}
+
+
+def _proof_out(p):
+    return {k: v for k, v in p.items() if k not in ("_id", "file_path")}
+
+
+async def _scoped_q(user, q):
+    sc = await _fee_scope(user)
+    if sc is not None:
+        q["class_name"] = {"$in": list(sc[0])}
+    return q
+
+
+@api.get("/fees/proofs")
+async def list_fee_proofs(status: str = "pending", q: str = "", user: dict = Depends(require_admin_or_principal)):
+    f = await _scoped_q(user, {"institution_id": user["institution_id"]})
+    if status != "all":
+        f["status"] = "pending" if status == "pending" else status
+    if q.strip():
+        rx = {"$regex": re.escape(q.strip()), "$options": "i"}
+        f["$or"] = [{"student_name": rx}, {"utr": rx}, {"receipt_no": rx}]
+    rows = await db.fee_payment_proofs.find(f, {"_id": 0, "file_path": 0}).sort("submitted_at", -1).to_list(300)
+    invs = {i["id"]: i for i in await db.fee_invoices.find({"id": {"$in": [r["invoice_id"] for r in rows]}}, {"_id": 0}).to_list(300)}
+    late = await _late_map({i["structure_id"] for i in invs.values() if i.get("structure_id")})
+    for r in rows:
+        i = invs.get(r["invoice_id"])
+        r["invoice_balance"] = _invoice_view(i, late.get(i.get("structure_id")))["balance"] if i else None
+        if r["status"] == "pending":
+            r["utr_duplicate"] = await _utr_usage(user["institution_id"], r.get("utr"), exclude_proof=r["id"])
+    return {"proofs": rows}
+
+
+@api.get("/fees/proofs/stats")
+async def fee_proof_stats(user: dict = Depends(require_admin_or_principal)):
+    base = {"institution_id": user["institution_id"]}
+    p = await db.fee_payment_proofs.count_documents(await _scoped_q(user, {**base, "status": "pending"}))
+    i = await db.fee_issues.count_documents(await _scoped_q(user, {**base, "status": "open"}))
+    return {"pending_proofs": p, "open_issues": i, "total": p + i}
+
+
+async def _fee_file_access(user, rec):
+    if user.get("role") == "parent":
+        if rec["student_id"] not in (user.get("student_ids") or []):
+            raise HTTPException(status_code=403, detail="Access denied")
+    else:
+        await _require_collect_scope(user, rec.get("class_name"))
+
+
+@api.get("/fees/proofs/{pid}/file")
+async def fee_proof_file(pid: str, user: dict = Depends(get_current_user)):
+    p = await db.fee_payment_proofs.find_one({"id": pid, "institution_id": user.get("institution_id")}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Proof not found")
+    await _fee_file_access(user, p)
+    try:
+        data, _ = _get_object(p["file_path"])
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not available")
+    return Response(content=data, media_type=p["file_type"], headers={"Cache-Control": "private, max-age=300"})
+
+
+class ProofApproveIn(_BM):
+    amount: Optional[float] = _F(default=None, gt=0, le=10_000_000)
+    utr: Optional[str] = _F(default=None, max_length=40)
+    paid_on: Optional[str] = _F(default=None, max_length=10)
+    note: Optional[str] = _F(default=None, max_length=300)
+
+
+class ProofRejectIn(_BM):
+    reason: str = _F(min_length=3, max_length=300)
+
+
+async def _proof_for_staff(user, pid):
+    p = await db.fee_payment_proofs.find_one({"id": pid, "institution_id": user["institution_id"]}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Proof not found")
+    await _require_collect_scope(user, p.get("class_name"))
+    return p
+
+
+@api.post("/fees/proofs/{pid}/approve")
+async def approve_fee_proof(pid: str, body: ProofApproveIn = Body(default=ProofApproveIn()), user: dict = Depends(require_admin_or_principal)):
+    """Approve → a normal fee payment through the shared payment path (method UPI, reference UTR, date = proof date)."""
+    p = await _proof_for_staff(user, pid)
+    if not await db.fee_payment_proofs.find_one_and_update({"id": pid, "status": "pending"}, {"$set": {"status": "approving"}}):
+        raise HTTPException(status_code=409, detail=f"This proof is already {p['status']}")
+    utr = (body.utr if body.utr is not None else p.get("utr")) or None
+    try:
+        res = await _create_fee_payment(user, p["invoice_id"], body.amount or p["amount"], "upi", utr,
+                                        body.note or (f"Parent proof {pid[:8]}" + (f" · {p['note']}" if p.get("note") else "")),
+                                        body.paid_on or p["paid_on"], extra={"proof_id": pid})
+    except HTTPException:
+        await db.fee_payment_proofs.update_one({"id": pid, "status": "approving"}, {"$set": {"status": "pending"}})
+        raise
+    pay = res["payment"]
+    await db.fee_payment_proofs.update_one({"id": pid}, {"$set": {
+        "status": "approved", "reviewed_by": user.get("name") or user.get("email"), "reviewed_at": now_iso(),
+        "payment_id": pay["id"], "receipt_no": pay["receipt_no"], "approved_amount": pay["amount"], "approved_utr": utr,
+        "approved_paid_on": pay["paid_on"]}})
+    await _fee_parent_notify(user["institution_id"], p["student_id"], f"Payment verified: {p.get('student_name')}",
+                             f"₹{pay['amount']:,.2f} received for {p.get('period_label')} · receipt {pay['receipt_no']}", p["invoice_id"], actor=user)
+    await audit(user, "fee_proof_approve", "fee_payment_proofs", pid, f"{pay['receipt_no']} · ₹{pay['amount']:,.2f} · UTR {utr or '—'}",
+                user["institution_id"])
+    return {"proof": _proof_out(await db.fee_payment_proofs.find_one({"id": pid})), **res}
+
+
+@api.post("/fees/proofs/{pid}/reject")
+async def reject_fee_proof(pid: str, body: ProofRejectIn, user: dict = Depends(require_admin_or_principal)):
+    p = await _proof_for_staff(user, pid)
+    reason = body.reason.strip()
+    r = await db.fee_payment_proofs.update_one({"id": pid, "status": "pending"}, {"$set": {
+        "status": "rejected", "reject_reason": reason, "reviewed_by": user.get("name") or user.get("email"), "reviewed_at": now_iso()}})
+    if not r.modified_count:
+        raise HTTPException(status_code=409, detail=f"This proof is already {p['status']}")
+    await _fee_parent_notify(user["institution_id"], p["student_id"], f"Payment proof not accepted: {p.get('student_name')}",
+                             f"{p.get('period_label')}: {reason}. You can upload a new proof in the parent portal.", p["invoice_id"], actor=user)
+    await audit(user, "fee_proof_reject", "fee_payment_proofs", pid, f"{p.get('student_name')} · {reason}", user["institution_id"])
+    return {"proof": _proof_out(await db.fee_payment_proofs.find_one({"id": pid}))}
+
+
+# ---- fee issues ("I have already paid") — a simple message thread, open|resolved ----
+async def _issue_msg(user, by, text, file=None, iid=None, key=None):
+    m = {"id": str(uuid.uuid4()), "by": by, "by_name": user.get("name") or user.get("email"), "text": text.strip()[:1000], "at": now_iso()}
+    if file is not None and (file.filename or ""):
+        data, ctype = await _read_proof_file(file)
+        m.update({"file_path": _store_fee_file(iid, f"issue-{key}-{m['id']}", data, ctype), "file_type": ctype})
+    return m
+
+
+def _issue_out(i):
+    return {**{k: v for k, v in i.items() if k != "_id"},
+            "messages": [{**{k: v for k, v in m.items() if k != "file_path"}, "has_file": bool(m.get("file_path"))} for m in i.get("messages", [])]}
+
+
+@api.post("/parent/fees/invoices/{inv_id}/issues")
+async def raise_fee_issue(inv_id: str, message: str = Form(...), file: Optional[UploadFile] = File(None),
+                          user: dict = Depends(require_roles("parent"))):
+    inv, view = await _invoice_for(user, inv_id)
+    iid = inv["institution_id"]
+    if len(message.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Please describe the issue")
+    last = await db.fee_payment_proofs.find_one({"invoice_id": inv_id}, {"_id": 0, "status": 1, "submitted_at": 1}, sort=[("submitted_at", -1)])
+    stale = last and last["status"] == "pending" and last["submitted_at"] < (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    if not (view["balance"] > 0 or (last and last["status"] == "rejected") or stale):
+        raise HTTPException(status_code=400, detail="This invoice is fully paid")
+    if await db.fee_issues.find_one({"invoice_id": inv_id, "status": "open"}, {"_id": 1}):
+        raise HTTPException(status_code=409, detail="An issue is already open for this invoice — add a message to it")
+    iss_id = str(uuid.uuid4())
+    doc = {"id": iss_id, "institution_id": iid, "invoice_id": inv_id, "student_id": inv["student_id"], "student_name": inv.get("student_name"),
+           "class_name": inv.get("class_name"), "section": inv.get("section"), "period_label": inv.get("period_label"),
+           "status": "open", "raised_by": user["id"], "raised_by_name": user.get("name"), "created_at": now_iso(), "updated_at": now_iso(),
+           "last_proof_status": (last or {}).get("status"), "messages": [await _issue_msg(user, "parent", message, file, iid, iss_id)]}
+    await db.fee_issues.insert_one(dict(doc))
+    await _notify_managers(iid, "fee_issue", f"Fee issue: {doc['student_name']}", message.strip()[:120], iss_id, class_names=[inv.get("class_name")])
+    await audit(user, "fee_issue_open", "fee_issues", iss_id, f"{doc['student_name']} · {doc['period_label']}", iid)
+    return _issue_out(doc)
+
+
+@api.post("/parent/fees/issues/{iss_id}/messages")
+async def parent_fee_issue_message(iss_id: str, message: str = Form(...), file: Optional[UploadFile] = File(None),
+                                   user: dict = Depends(require_roles("parent"))):
+    i = await db.fee_issues.find_one({"id": iss_id, "institution_id": user["institution_id"]}, {"_id": 0})
+    if not i or i["student_id"] not in (user.get("student_ids") or []):
+        raise HTTPException(status_code=404, detail="Issue not found")
+    m = await _issue_msg(user, "parent", message, file, i["institution_id"], iss_id)
+    await db.fee_issues.update_one({"id": iss_id}, {"$push": {"messages": m}, "$set": {"status": "open", "updated_at": now_iso()}})
+    return _issue_out(await db.fee_issues.find_one({"id": iss_id}))
+
+
+@api.get("/fees/issues")
+async def list_fee_issues(status: str = "open", user: dict = Depends(require_admin_or_principal)):
+    f = await _scoped_q(user, {"institution_id": user["institution_id"]})
+    if status != "all":
+        f["status"] = status
+    return {"issues": [_issue_out(i) for i in await db.fee_issues.find(f, {"_id": 0}).sort("updated_at", -1).to_list(300)]}
+
+
+async def _issue_for_staff(user, iss_id):
+    i = await db.fee_issues.find_one({"id": iss_id, "institution_id": user["institution_id"]}, {"_id": 0})
+    if not i:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    await _require_collect_scope(user, i.get("class_name"))
+    return i
+
+
+class IssueReplyIn(_BM):
+    text: str = _F(min_length=1, max_length=1000)
+    resolve: bool = False
+
+
+@api.post("/fees/issues/{iss_id}/reply")
+async def staff_fee_issue_reply(iss_id: str, body: IssueReplyIn, user: dict = Depends(require_admin_or_principal)):
+    i = await _issue_for_staff(user, iss_id)
+    m = await _issue_msg(user, "staff", body.text)
+    await db.fee_issues.update_one({"id": iss_id}, {"$push": {"messages": m}, "$set": {
+        "updated_at": now_iso(), **({"status": "resolved", "resolved_by": m["by_name"], "resolved_at": now_iso()} if body.resolve else {})}})
+    await _fee_parent_notify(user["institution_id"], i["student_id"], f"School replied about fees: {i.get('student_name')}", body.text[:200], iss_id, actor=user)
+    return _issue_out(await db.fee_issues.find_one({"id": iss_id}))
+
+
+@api.post("/fees/issues/{iss_id}/status")
+async def staff_fee_issue_status(iss_id: str, payload: dict = Body(...), user: dict = Depends(require_admin_or_principal)):
+    i = await _issue_for_staff(user, iss_id)
+    st = (payload or {}).get("status")
+    if st not in ("open", "resolved"):
+        raise HTTPException(status_code=400, detail="status must be open or resolved")
+    await db.fee_issues.update_one({"id": iss_id}, {"$set": {"status": st, "updated_at": now_iso(),
+                                                             **({"resolved_by": user.get("name"), "resolved_at": now_iso()} if st == "resolved" else {})}})
+    await audit(user, "fee_issue_status", "fee_issues", iss_id, f"{i.get('student_name')} → {st}", user["institution_id"])
+    return _issue_out(await db.fee_issues.find_one({"id": iss_id}))
+
+
+@api.post("/fees/issues/{iss_id}/record-payment")
+async def staff_fee_issue_payment(iss_id: str, body: ProofApproveIn, user: dict = Depends(require_admin_or_principal)):
+    """Staff confirmed the money arrived → record it (shared payment path, method UPI) and resolve the issue."""
+    i = await _issue_for_staff(user, iss_id)
+    if not body.amount:
+        raise HTTPException(status_code=400, detail="amount is required")
+    res = await _create_fee_payment(user, i["invoice_id"], body.amount, "upi", body.utr or None,
+                                    body.note or f"Resolved fee issue {iss_id[:8]}", body.paid_on, extra={"issue_id": iss_id})
+    pay = res["payment"]
+    m = await _issue_msg(user, "staff", f"Payment recorded: receipt {pay['receipt_no']} · ₹{pay['amount']:,.2f}")
+    await db.fee_issues.update_one({"id": iss_id}, {"$push": {"messages": m}, "$set": {
+        "status": "resolved", "resolved_by": m["by_name"], "resolved_at": now_iso(), "updated_at": now_iso(), "payment_id": pay["id"]}})
+    await _fee_parent_notify(user["institution_id"], i["student_id"], f"Payment verified: {i.get('student_name')}",
+                             f"₹{pay['amount']:,.2f} · receipt {pay['receipt_no']}", iss_id, actor=user)
+    return {"issue": _issue_out(await db.fee_issues.find_one({"id": iss_id})), **res}
+
+
+@api.get("/fees/issues/{iss_id}/messages/{mid}/file")
+async def fee_issue_file(iss_id: str, mid: str, user: dict = Depends(get_current_user)):
+    i = await db.fee_issues.find_one({"id": iss_id, "institution_id": user.get("institution_id")}, {"_id": 0})
+    if not i:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    await _fee_file_access(user, i)
+    m = next((m for m in i.get("messages", []) if m["id"] == mid and m.get("file_path")), None)
+    if not m:
+        raise HTTPException(status_code=404, detail="No attachment")
+    try:
+        data, _ = _get_object(m["file_path"])
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not available")
+    return Response(content=data, media_type=m["file_type"], headers={"Cache-Control": "private, max-age=300"})
+
+
+# ---- student fee statement ----
+async def _statement_data(iid, sid, academic_year=None):
+    stu = await db.students.find_one({"id": sid, "institution_id": iid}, {"_id": 0})
+    if not stu:
+        raise HTTPException(status_code=404, detail="Student not found")
+    q = {"institution_id": iid, "student_id": sid, **({"academic_year": academic_year} if academic_year else {})}
+    invs = await db.fee_invoices.find(q, {"_id": 0}).sort("due_date", 1).to_list(500)
+    late = await _late_map({i["structure_id"] for i in invs if i.get("structure_id")})
+    views = [_invoice_view(i, late.get(i.get("structure_id"))) for i in invs]
+    pays = await db.fee_payments.find({"institution_id": iid, "invoice_id": {"$in": [i["id"] for i in invs]}},
+                                      {"_id": 0, "items": 0}).sort([("paid_on", 1), ("collected_at", 1)]).to_list(2000)
+    rows = [{"period_label": v["period_label"], "academic_year": v.get("academic_year"), "due_date": v.get("due_date"),
+             "amount": _r2(float(v.get("subtotal") or 0) + v["fine_amount"]), "concession": _r2(v.get("discount_amount") or 0),
+             "paid": v["paid_amount"], "balance": v["balance"], "status": v["status"]} for v in views]
+    tot = {k: _r2(sum(r[k] for r in rows)) for k in ("amount", "concession", "paid", "balance")}
+    live = [p for p in pays if not p.get("reversed")]
+    inst = await db.institutions.find_one({"id": iid}, {"_id": 0, "name": 1, "address": 1, "phone": 1}) or {}
+    return {"student": {"id": sid, "name": f"{stu.get('first_name', '')} {stu.get('last_name', '')}".strip(),
+                        "admission_no": stu.get("admission_no"), "class_name": stu.get("class_name"), "section": stu.get("section"),
+                        "guardian_name": stu.get("guardian_name")},
+            "academic_year": academic_year or "All years", "invoices": rows, "totals": tot,
+            "payments": [{"date": p.get("paid_on") or p["collected_at"][:10], "receipt_no": p["receipt_no"], "method": p["method"],
+                          "reference": p.get("reference"), "amount": p["amount"], "reversed": bool(p.get("reversed")),
+                          "credit_note_no": p.get("credit_note_no")} for p in pays],
+            "payments_total": _r2(sum(p["amount"] for p in live)), "reversed_total": _r2(sum(p["amount"] for p in pays if p.get("reversed"))),
+            "closing_balance": tot["balance"], "carried_forward": _r2(sum(float(i.get("carried_forward_amount") or 0) for i in invs if i.get("carried_forward_to"))),
+            "generated_on": datetime.now(await _inst_tz(iid)).strftime("%Y-%m-%d %H:%M"), "school": inst}
+
+
+def _statement_pdf(d, logo_bytes=None) -> bytes:
+    import io
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+    R, B, I, money = _receipt_fonts()
+    SZ = 8.5
+    st = ParagraphStyle("s", fontName=R, fontSize=SZ, leading=SZ + 2.5)
+    stR = ParagraphStyle("r", parent=st, alignment=2)
+    h1 = ParagraphStyle("h1", fontName=B, fontSize=15, leading=18)
+    h2 = ParagraphStyle("h2", fontName=B, fontSize=10, leading=13, spaceBefore=8, spaceAfter=4)
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=14 * mm, rightMargin=14 * mm, topMargin=12 * mm, bottomMargin=14 * mm,
+                            title=f"Fee statement {d['student']['name']}")
+    W = A4[0] - 28 * mm
+    s, sch = d["student"], d["school"]
+    head = [[Paragraph(sch.get("name") or "", h1), Paragraph("<b>FEE STATEMENT</b>", ParagraphStyle("t", parent=stR, fontName=B, fontSize=11))],
+            [Paragraph(sch.get("address") or "", st), Paragraph(f"Academic year: {d['academic_year']}", stR)]]
+    if logo_bytes:
+        try:
+            head[0].insert(0, Image(io.BytesIO(logo_bytes), 14 * mm, 14 * mm)); head[1].insert(0, "")
+        except Exception:
+            pass
+    cols = [16 * mm, W - 16 * mm - 60 * mm, 60 * mm] if len(head[0]) == 3 else [W - 60 * mm, 60 * mm]
+    ht = Table(head, colWidths=cols)
+    ht.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LINEBELOW", (0, -1), (-1, -1), 0.8, colors.black),
+                            ("BOTTOMPADDING", (0, -1), (-1, -1), 6)] + ([("SPAN", (0, 0), (0, 1))] if len(cols) == 3 else [])))
+    info = Table([[Paragraph(f"Student: <b>{s['name']}</b>", st), Paragraph(f"Admission no.: {s.get('admission_no') or '—'}", st)],
+                  [Paragraph(f"Class: {s.get('class_name') or ''} {s.get('section') or ''}", st), Paragraph(f"Guardian: {s.get('guardian_name') or '—'}", st)]],
+                 colWidths=[W / 2, W / 2])
+    base = [("FONTNAME", (0, 0), (-1, -1), R), ("FONTSIZE", (0, 0), (-1, -1), SZ), ("FONTNAME", (0, 0), (-1, 0), B),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")), ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]
+    inv_rows = [["Period", "Due date", "Amount", "Concession", "Paid", "Balance", "Status"]]
+    for r in d["invoices"]:
+        inv_rows.append([r["period_label"], r.get("due_date") or "—", money(r["amount"]), money(-r["concession"]) if r["concession"] else money(0),
+                         money(r["paid"]), money(r["balance"]), r["status"].replace("_", " ").title()])
+    t = d["totals"]
+    inv_rows.append(["Total", "", money(t["amount"]), money(-t["concession"]) if t["concession"] else money(0), money(t["paid"]), money(t["balance"]), ""])
+    it = Table(inv_rows, colWidths=[W * x for x in (0.22, 0.12, 0.14, 0.14, 0.13, 0.13, 0.12)], repeatRows=1)
+    it.setStyle(TableStyle(base + [("ALIGN", (2, 0), (5, -1), "RIGHT"), ("FONTNAME", (0, -1), (-1, -1), B),
+                                   ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f8fafc"))]))
+    pay_rows = [["Date", "Receipt no.", "Method", "Reference", "Amount"]]
+    for p in d["payments"]:
+        amt = money(p["amount"])
+        pay_rows.append([p["date"], p["receipt_no"] + (" (REVERSED)" if p["reversed"] else ""), p["method"].upper(), p.get("reference") or "—",
+                         Paragraph(f"<strike>{amt}</strike>", stR) if p["reversed"] else amt])
+    pay_rows.append(["Total received", "", "", "", money(d["payments_total"])])
+    pt = Table(pay_rows, colWidths=[W * x for x in (0.14, 0.30, 0.12, 0.26, 0.18)], repeatRows=1)
+    pt.setStyle(TableStyle(base + [("ALIGN", (4, 0), (4, -1), "RIGHT"), ("FONTNAME", (0, -1), (-1, -1), B),
+                                   ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f8fafc"))]
+                           + [("TEXTCOLOR", (0, i), (3, i), colors.HexColor("#b91c1c")) for i, p in enumerate(d["payments"], 1) if p["reversed"]]))
+    summ = Table([["Total billed (after concessions)", money(_r2(t["amount"] - t["concession"]))], ["Total paid", money(t["paid"])],
+                  ["Closing balance", money(d["closing_balance"])]], colWidths=[W - 45 * mm, 45 * mm], hAlign="RIGHT")
+    summ.setStyle(TableStyle([("FONTNAME", (0, 0), (-1, -1), R), ("FONTSIZE", (0, 0), (-1, -1), SZ), ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                              ("FONTNAME", (0, -1), (-1, -1), B), ("LINEABOVE", (0, -1), (-1, -1), 0.8, colors.black)]))
+    story = [ht, Spacer(1, 4 * mm), info, Paragraph("Invoices", h2), it, Paragraph("Payments", h2), pt, Spacer(1, 4 * mm), summ]
+    if d.get("reversed_total"):
+        story.append(Paragraph(f"Reversed receipts (struck through) are excluded from totals: {money(d['reversed_total'])}.", st))
+    if d.get("carried_forward"):
+        story.append(Paragraph(f"Carried forward to the next academic year as Previous dues: {money(d['carried_forward'])}.", st))
+
+    def foot(c, _doc):
+        c.setFont(I, 7.5)
+        c.drawString(14 * mm, 8 * mm, f"Generated on {d['generated_on']} · system-generated statement")
+        c.drawRightString(A4[0] - 14 * mm, 8 * mm, f"Page {c.getPageNumber()}")
+    doc.build(story, onFirstPage=foot, onLaterPages=foot)
+    return buf.getvalue()
+
+
+async def _statement_response(iid, sid, academic_year):
+    d = await _statement_data(iid, sid, academic_year or None)
+    logo = None
+    inst = await db.institutions.find_one({"id": iid}, {"_id": 0, "logo_path": 1})
+    if (inst or {}).get("logo_path"):
+        try:
+            logo, _ = _get_object(inst["logo_path"])
+        except Exception:
+            logo = None
+    name = re.sub(r"[^A-Za-z0-9]+", "-", d["student"]["name"]).strip("-") or "student"
+    return Response(content=_statement_pdf(d, logo), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="fee-statement-{name}.pdf"'})
+
+
+async def _student_for_staff(user, sid):
+    s = await db.students.find_one({"id": sid, "institution_id": user["institution_id"]}, {"_id": 0, "class_name": 1})
+    if not s:
+        raise HTTPException(status_code=404, detail="Student not found")
+    await _require_collect_scope(user, s.get("class_name"))
+
+
+@api.get("/fees/students/{sid}/statement")
+async def fee_statement_json(sid: str, academic_year: str = "", user: dict = Depends(require_admin_or_principal)):
+    await _student_for_staff(user, sid)
+    return await _statement_data(user["institution_id"], sid, academic_year or None)
+
+
+@api.get("/fees/students/{sid}/statement.pdf")
+async def fee_statement_pdf(sid: str, academic_year: str = "", user: dict = Depends(require_admin_or_principal)):
+    await _student_for_staff(user, sid)
+    return await _statement_response(user["institution_id"], sid, academic_year)
+
+
+@api.get("/parent/child/{sid}/fees/statement.pdf")
+async def parent_fee_statement_pdf(sid: str, academic_year: str = "", user: dict = Depends(require_roles("parent"))):
+    if sid not in (user.get("student_ids") or []):
+        raise HTTPException(status_code=403, detail="This student is not linked to your account")
+    return await _statement_response(user["institution_id"], sid, academic_year)
+
+
+@app.on_event("startup")
+async def _fees_51_setup():
+    await db.fee_payment_proofs.create_index("invoice_id", unique=True, name="one_pending_proof_per_invoice",
+                                             partialFilterExpression={"status": "pending"})
+    await db.fee_payment_proofs.create_index([("institution_id", 1), ("status", 1), ("submitted_at", -1)])
+    await db.fee_issues.create_index([("institution_id", 1), ("status", 1), ("updated_at", -1)])
+    await db.fee_payments.create_index([("institution_id", 1), ("paid_on", 1)])
+    tzs = {}  # additive backfill: payment date in the institution timezone (collected_at itself is never modified)
+    async for p in db.fee_payments.find({"paid_on": {"$exists": False}}, {"_id": 0, "id": 1, "institution_id": 1, "collected_at": 1}):
+        if p["institution_id"] not in tzs:
+            tzs[p["institution_id"]] = await _inst_tz(p["institution_id"])
+        local = datetime.fromisoformat(p["collected_at"]).astimezone(tzs[p["institution_id"]]).date().isoformat()
+        await db.fee_payments.update_one({"id": p["id"], "paid_on": {"$exists": False}},
+                                         {"$set": {"paid_on": local, "recorded_at": p["collected_at"], "backdated": False, "paid_on_backfilled": True}})
 
 
 @app.on_event("startup")

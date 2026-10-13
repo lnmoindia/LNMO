@@ -32,7 +32,7 @@ export default function DayBookTab() {
       <div className="flex flex-wrap items-center gap-3">
         <Input type="date" className="w-44" value={day} onChange={(e) => setDay(e.target.value)} data-testid="daybook-date" />
         <Button variant="outline" disabled={!d} onClick={() => printDayBook(d)} data-testid="daybook-print"><Printer size={14} className="mr-1.5" /> Print / PDF</Button>
-        <p className="text-xs text-slate-400">Dates are UTC, matching receipt dates.</p>
+        <p className="text-xs text-slate-400">Grouped by payment date in the school timezone (IST unless set).</p>
       </div>
       {d && (<>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

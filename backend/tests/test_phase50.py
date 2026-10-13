@@ -15,8 +15,8 @@ TEST_DB = "lnmo_phase50_test"
 PA_EMAIL = server.os.environ["PLATFORM_ADMIN_EMAIL"].lower()
 PA_PW = server.os.environ["PLATFORM_ADMIN_PASSWORD"]
 from zoneinfo import ZoneInfo  # noqa: E402
-TODAY = datetime.now(timezone.utc).date()  # Day Book / receipts are UTC-dated
-LOCAL = datetime.now(ZoneInfo("Asia/Kolkata")).date()  # dues + reminder day boundary = institution tz (fallback IST)
+LOCAL = datetime.now(ZoneInfo("Asia/Kolkata")).date()  # Phase 51: dues, reminders AND day book use institution tz (IST)
+TODAY = LOCAL
 D = lambda n: (LOCAL + timedelta(days=n)).isoformat()  # noqa: E731
 D45, D8, F20 = D(-45), D(-8), D(20)
 

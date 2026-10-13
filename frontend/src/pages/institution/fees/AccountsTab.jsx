@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Search, Wallet, Printer, Undo2, BookOpenCheck, BellRing, FileDown } from "lucide-react";
+import { Search, Wallet, Printer, Undo2, BookOpenCheck, BellRing, FileDown, FileText } from "lucide-react";
 import { toast } from "sonner";
 import api, { errText } from "../../../lib/api";
-import { inr, StatusChip, printReceiptById, downloadReceiptPdf } from "../../../lib/fees";
+import { inr, StatusChip, printReceiptById, downloadReceiptPdf, downloadBlob, printInvoiceById, localToday } from "../../../lib/fees";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
@@ -19,13 +19,13 @@ export const remindInvoice = async (invId) => {
 };
 
 export function CollectDialog({ inv, onClose, onDone }) {
-  const [f, setF] = useState({ amount: "", method: "cash", reference: "", note: "" });
+  const [f, setF] = useState({ amount: "", method: "cash", reference: "", note: "", paid_on: localToday() });
   const [busy, setBusy] = useState(false);
-  useEffect(() => { if (inv) setF({ amount: String(inv.balance), method: "cash", reference: "", note: "" }); }, [inv]);
+  useEffect(() => { if (inv) setF({ amount: String(inv.balance), method: "cash", reference: "", note: "", paid_on: localToday() }); }, [inv]);
   const save = async () => {
     setBusy(true);
     try {
-      const { data } = await api.post("/fees/payments", { invoice_id: inv.id, amount: Number(f.amount), method: f.method, reference: f.reference || null, note: f.note || null });
+      const { data } = await api.post("/fees/payments", { invoice_id: inv.id, amount: Number(f.amount), method: f.method, reference: f.reference || null, note: f.note || null, paid_on: f.paid_on });
       toast.success(`Receipt ${data.payment.receipt_no} · ${inr(data.payment.amount)}`, { action: { label: "Print", onClick: () => printReceiptById(data.payment.id) } });
       onDone(data);
     } catch (e) { toast.error(errText(e)); } finally { setBusy(false); }
@@ -41,9 +41,11 @@ export function CollectDialog({ inv, onClose, onDone }) {
           <div className="space-y-1.5"><Label>Method</Label>
             <select className={`${sel} w-full`} value={f.method} onChange={(e) => setF({ ...f, method: e.target.value })} data-testid="fee-collect-method">
               {["cash", "upi", "cheque", "bank", "other"].map((m) => <option key={m} value={m}>{m.toUpperCase()}</option>)}</select></div>
-          <div className="space-y-1.5 col-span-2"><Label>Reference (UPI txn / cheque no.)</Label><Input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} data-testid="fee-collect-reference" /></div>
+          <div className="space-y-1.5"><Label>Payment date</Label><Input type="date" max={localToday()} value={f.paid_on} onChange={(e) => setF({ ...f, paid_on: e.target.value })} data-testid="fee-collect-date" /></div>
+          <div className="space-y-1.5"><Label>Reference (UPI txn / cheque no.)</Label><Input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} data-testid="fee-collect-reference" /></div>
           <div className="space-y-1.5 col-span-2"><Label>Note</Label><Input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} data-testid="fee-collect-note" /></div>
         </div>
+        {f.paid_on && f.paid_on < localToday() && <p className="text-xs text-amber-700" data-testid="fee-collect-backdated">Backdated entry — it will appear in the Day Book on {f.paid_on} and is audit-logged.</p>}
         {Number(f.amount) > Number(inv?.balance) && <p className="text-xs text-rose-600" data-testid="fee-collect-over">Amount is more than the balance due.</p>}
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -100,7 +102,7 @@ function AccountSettings({ led, onSaved }) {
   );
 }
 
-function Ledger({ aid, readOnly, onClose }) {
+function Ledger({ aid, readOnly, canCollect, onClose }) {
   const [led, setLed] = useState(null);
   const [collect, setCollect] = useState(null);
   const [rev, setRev] = useState(null);
@@ -118,6 +120,7 @@ function Ledger({ aid, readOnly, onClose }) {
               <div key={l} className="rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3"><p className="text-xs text-slate-500">{l}</p><p className={`font-bold ${t}`} data-testid={`fee-ledger-${l.toLowerCase().replace(" ", "-")}`}>{typeof v === "number" ? inr(v) : v}</p></div>
             ))}
           </div>
+          <div className="flex justify-end"><Button size="sm" variant="outline" onClick={() => downloadBlob(`/fees/students/${led.account.student_id}/statement.pdf?academic_year=${encodeURIComponent(led.account.academic_year || "")}`, `fee-statement-${led.account.student_name}.pdf`)} data-testid="fee-ledger-statement"><FileText size={13} className="mr-1.5" /> Download statement</Button></div>
           {!readOnly && <AccountSettings key={led.account.id + JSON.stringify(led.account.discount)} led={led} onSaved={load} />}
           <table className="w-full text-sm">
             <thead className="text-xs text-slate-500 text-left"><tr><th className="py-1">Period</th><th>Due</th><th className="text-right">Amount</th><th className="text-right">Paid</th><th className="text-right">Balance</th><th>Status</th><th /></tr></thead>
@@ -127,9 +130,10 @@ function Ledger({ aid, readOnly, onClose }) {
                   <td className="py-2"><p className="font-medium">{i.period_label}</p><p className="text-xs text-slate-500">{i.items.map((x) => `${x.title} ${inr(x.amount)}`).join(" · ")}{i.discount_amount ? ` · −${inr(i.discount_amount)}` : ""}{i.fine_amount ? ` · late +${inr(i.fine_amount)}` : ""}</p></td>
                   <td>{i.due_date}</td><td className="text-right">{inr(i.amount_due)}</td><td className="text-right">{inr(i.paid_amount)}</td><td className="text-right font-semibold">{inr(i.balance)}</td>
                   <td><StatusChip status={i.status} testid={`fee-invoice-status-${i.period_label}`} /></td>
-                  <td className="text-right whitespace-nowrap">{!readOnly && i.balance > 0 && (<>
-                    <Button size="sm" variant="ghost" title="Send reminder" onClick={() => remindInvoice(i.id)} data-testid={`fee-remind-${i.period_label}`}><BellRing size={13} /></Button>
-                    <Button size="sm" variant="outline" onClick={() => setCollect(i)} data-testid={`fee-collect-${i.period_label}`}><Wallet size={13} className="mr-1" /> Collect</Button></>)}</td>
+                  <td className="text-right whitespace-nowrap">
+                    <Button size="sm" variant="ghost" title="Print invoice (with UPI QR)" onClick={() => printInvoiceById(i.id)} data-testid={`fee-print-invoice-${i.period_label}`}><Printer size={13} /></Button>
+                    {!readOnly && i.balance > 0 && <Button size="sm" variant="ghost" title="Send reminder" onClick={() => remindInvoice(i.id)} data-testid={`fee-remind-${i.period_label}`}><BellRing size={13} /></Button>}
+                    {canCollect && i.balance > 0 && <Button size="sm" variant="outline" onClick={() => setCollect(i)} data-testid={`fee-collect-${i.period_label}`}><Wallet size={13} className="mr-1" /> Collect</Button>}</td>
                 </tr>
               ))}
             </tbody>
@@ -140,12 +144,12 @@ function Ledger({ aid, readOnly, onClose }) {
             <ul className="divide-y divide-slate-100 dark:divide-slate-800">
               {led.payments.map((p) => (
                 <li key={p.id} className="py-2 flex items-center justify-between gap-3 text-sm" data-testid={`fee-payment-${p.receipt_no}`}>
-                  <span><b>{p.receipt_no}</b> <span className="text-xs text-slate-500">· {p.period_label} · {p.method.toUpperCase()}{p.reference ? ` ${p.reference}` : ""} · {(p.collected_at || "").slice(0, 10)} · {p.collected_by}</span>
+                  <span><b>{p.receipt_no}</b> <span className="text-xs text-slate-500">· {p.period_label} · {p.method.toUpperCase()}{p.reference ? ` ${p.reference}` : ""} · {p.paid_on || (p.collected_at || "").slice(0, 10)}{p.backdated ? " (backdated)" : ""} · {p.collected_by}</span>
                     {p.reversed && <> <StatusChip status="reversed" /> <span className="text-xs text-amber-700">{p.credit_note_no} · {p.reverse_reason}</span></>}</span>
                   <span className="flex items-center gap-2"><b className={p.reversed ? "line-through text-slate-400" : ""}>{inr(p.amount)}</b>
                     <Button size="sm" variant="ghost" onClick={() => printReceiptById(p.id)} data-testid={`fee-print-${p.receipt_no}`}><Printer size={14} /></Button>
                     <Button size="sm" variant="ghost" title="Download PDF" onClick={() => downloadReceiptPdf(p.id, p.receipt_no)} data-testid={`fee-pdf-${p.receipt_no}`}><FileDown size={14} /></Button>
-                    {!readOnly && !p.reversed && <Button size="sm" variant="ghost" onClick={() => setRev(p)} data-testid={`fee-reverse-${p.receipt_no}`}><Undo2 size={14} /></Button>}</span>
+                    {canCollect && !p.reversed && <Button size="sm" variant="ghost" onClick={() => setRev(p)} data-testid={`fee-reverse-${p.receipt_no}`}><Undo2 size={14} /></Button>}</span>
                 </li>
               ))}
             </ul>
@@ -158,7 +162,7 @@ function Ledger({ aid, readOnly, onClose }) {
   );
 }
 
-export default function AccountsTab({ readOnly }) {
+export default function AccountsTab({ readOnly, canCollect }) {
   const [structures, setStructures] = useState([]);
   const [sid, setSid] = useState("");
   const [cls, setCls] = useState("");
@@ -206,7 +210,7 @@ export default function AccountsTab({ readOnly }) {
           </tbody>
         </table>
       </div>
-      <Ledger aid={open} readOnly={readOnly} onClose={() => { setOpen(null); load(); }} />
+      <Ledger aid={open} readOnly={readOnly} canCollect={canCollect} onClose={() => { setOpen(null); load(); }} />
     </div>
   );
 }
