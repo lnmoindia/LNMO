@@ -13733,10 +13733,15 @@ async def _fees_indexes():
 app.include_router(api)
 
 
+_cors_list = [o.strip().rstrip("/") for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip() and o.strip() != "*"]
+if os.environ.get("PUBLIC_BASE_URL"):
+    _cors_list.append(os.environ["PUBLIC_BASE_URL"].rstrip("/"))
+# Credentialed CORS never answers "*": explicit origins + the Emergent preview/deploy domains (regex echoes the exact origin).
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=_cors_list,
+    allow_origin_regex=os.environ.get("CORS_ORIGIN_REGEX") or None,
     allow_methods=["*"],
     allow_headers=["*"],
 )
