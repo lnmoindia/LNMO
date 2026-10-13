@@ -69,10 +69,9 @@ export default function InstitutionDetail() {
             <F k="slug" label="URL slug" placeholder="greenwood" />
           </div>
           <div className="text-xs text-slate-500">Domain auto-generates teacher & student login IDs (e.g. ravi.kumar@{form.domain || "greenwood.edu"}) — not DNS hosting. Slug powers a friendly branded login URL; lowercase letters, numbers and hyphens only.</div>
-          {(form.slug || form.domain) && (() => {
-            const link = form.slug
-              ? `${window.location.origin}/login/${form.slug}`
-              : `${window.location.origin}/login?domain=${encodeURIComponent(form.domain)}`;
+          {(form.slug || form.code || form.domain) && (() => {
+            const key = form.slug || (form.code || "").toLowerCase() || form.domain;
+            const link = `${window.location.origin}/login/${encodeURIComponent(key)}`;
             return (
               <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 p-4 space-y-2" data-testid="branded-login-link">
                 <Label>Branded login link</Label>

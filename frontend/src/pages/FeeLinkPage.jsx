@@ -11,7 +11,7 @@ export default function FeeLinkPage() {
   useEffect(() => {
     api.get(`/public/fee-link/${token}`).then(({ data }) => {
       sessionStorage.setItem("fee_link_child", data.student_id);
-      navigate(`/parents?child=${data.student_id}&fees=1`, { replace: true });
+      navigate(`/parents/fees?child=${data.student_id}`, { replace: true });
     }).catch((e) => setErr(errText(e)));
   }, [token, navigate]);
   return (

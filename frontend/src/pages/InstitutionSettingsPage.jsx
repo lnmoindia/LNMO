@@ -7,6 +7,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Skeleton } from "../components/ui/skeleton";
 import { UpiCard } from "./UpiSettingsCard";
+import { LoginPageCard } from "../components/settings/LoginPageCard";
 
 const FIELDS = [
   { name: "name", label: "Institution name" },
@@ -214,6 +215,7 @@ export default function InstitutionSettingsPage() {
       </div>
 
       <LogoCard />
+      <LoginPageCard />
       <SealCard />
       <UpiCard />
     </div>

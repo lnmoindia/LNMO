@@ -704,3 +704,29 @@ User-confirmed rules: same-section default (8-A→9-A) with per-student override
   - Demo data added through the real APIs (s7_fill.py): Arjun absent today with cover assigned, requested and open; Suresh absent yesterday, all covered; Rahul's leave request pending; class leaders, rooms, the Period-1 rule on 8A, 3 achievements. Screenshots taken by s8_capture.py.
   - Gaps stated in the guide (not built): per-teacher period limits, unavailable slots, room allocation by the generator, partial-day absence, a Cancel-absence button in the UI, a substitution report or export, and substitutions shown in the student/parent portals.
 
+- Phase 52 (2026-10-13): Cancel absence. Preview: GET /api/absences/{id}/cancel-preview. Cancel: POST /api/absences/{id}/cancel {reason}. Remove one cover: POST /api/substitutions/{id}/remove-cover.
+  - Periods that have already started are kept as history.
+  - Notifications go out as an in-app alert plus a STUB SMS.
+  - Student/parent portals get a "Today's changes" notice and a substitute badge.
+  - New endpoint GET /api/parent/child/{sid}/timetable; today_changes items now carry period_label.
+  - Note: period_no is the slot index and includes breaks, so in Sunrise slot 7 is labelled "P5".
+- Phase 53 (2026-10-13), fee structures:
+  - Soft delete via DELETE /api/fees/structures/{sid}. Returns 409 if the structure is used; the deleted flag is set first, then usage is re-checked (rolled back on a race).
+  - Archive/unarchive (admin only). Archived structures are blocked from apply and generate; old invoices, payments and reports keep working.
+  - Structures store academic_year_id, chosen from a dropdown. Legacy text years are mapped to an id at read time when the match is unambiguous; nothing is written to the database.
+- Phase 53, branded login page /login/<slug or code>:
+  - Public: /api/public/institutions/{code}/branding (name, logo, tagline, background only), .../login-background, and /api/public/login-default.jpg.
+  - Admin: Settings → Login page card, using /api/institution/login-page and /api/institution/login-page/background. Uploads are resized to 1920px JPEG and stored in object storage.
+- Phase 53, presets: removed from the Academic Units page. The backend returns 409 for apply-preset and apply_presets once setup is complete.
+
+
+## Phase 54 (Sep 2026): Portal polish and school branding
+- The parent portal (/parents/*) and student portal (/portal/*) now use React Router pages inside a shared branded PortalShell (pages/portal/). Desktop has a sidebar. Mobile has a bottom nav, a More sheet and a sticky top bar. Dark mode works. "Powered by LNMO" appears only in the sidebar or footer. The browser title shows "<School> · Parent/Student/Teacher Portal".
+- Parent pages: home, timetable, homework, attendance (calendar), results, fees, notices, achievements, profile, account, support. The selected child is kept in ?child= and stays selected across pages. A spoofed child id resets to the parent's own child.
+- Student pages: dashboard, timetable, homework, assignments, notices, exams, attendance, results, fees, achievements, profile, AI tutor, library.
+- Teacher portal: branding only. The school logo and name appear in the TeacherShell sidebar.
+- Old links still work: /parents?fees=1, ?child=, /fees/invoice/:token → /parents/fees?child=, /portal-coming-soon → /portal.
+- Login links: the Platform Manager "Domain & Access" tab now gives /login/<slug|code|domain> with Copy and Open buttons. Old /login?domain=x links redirect to /login/x. The backend login slug lookup also matches the school's domain.
+- No new data endpoints. Branding comes from the existing GET /api/me/branding. Tests: iteration_38 passed 100%.
+- Backlog: notices have no read/unread state. A teacher without fee access sees a harmless 403 console error from the fee-proofs badge call that existed before this phase.
+

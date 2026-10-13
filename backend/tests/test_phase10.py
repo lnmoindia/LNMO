@@ -212,7 +212,7 @@ def test_unit_principal_scope(ctx):
 
 def test_cancel_cascades_to_substitutions(ctx):
     admin, t = ctx["admin"], ctx["t"]
-    WED = "2026-01-07"  # a Wednesday
+    WED = "2027-01-06"  # a future Wednesday (Phase 52: only not-yet-started periods are cancellable)
     admin.post("/api/timetable/place", json={"academic_year": "2026-27", "class_name": "Grade 8", "section": "A",
                "day": "wed", "period_no": 1, "subject": "Maths", "teacher_id": t["Tabs"]["id"], "override": True})
     ab = admin.post("/api/absences", json={"teacher_id": t["Tabs"]["id"], "date": WED}).json()["absence"]
@@ -224,7 +224,7 @@ def test_cancel_cascades_to_substitutions(ctx):
     d0 = admin.get("/api/substitutions/dashboard", params={"date": WED}).json()
     assert d0["absent_today"] >= 1 and (d0["assigned"] + d0["open"]) >= 1
     # cancel the absence → subs cancelled
-    res = admin.post(f"/api/absences/{ab['id']}/cancel").json()
+    res = admin.post(f"/api/absences/{ab['id']}/cancel", json={"reason": "Back at school"}).json()
     assert res["substitutions_cancelled"] >= 1
     subs2 = _subs_of(admin, ab["id"])
     assert all(s["status"] == "cancelled" for s in subs2)

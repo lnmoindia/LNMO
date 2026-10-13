@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   UserX, CalendarRange, Plus, CheckCircle2, Clock, AlertTriangle, Users2, Zap,
-  ChevronDown, ChevronRight, Check, X, Send,
+  ChevronDown, ChevronRight, Check, X, Send, Ban, Undo2,
 } from "lucide-react";
+import { CancelAbsenceDialog } from "../../components/substitutions/CancelAbsenceDialog";
 import { toast } from "sonner";
 import api, { errText } from "../../lib/api";
 import { Button } from "../../components/ui/button";
@@ -19,6 +20,7 @@ const STATUS = {
   open: { label: "Needs cover", cls: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400", icon: AlertTriangle },
   requested: { label: "Requested", cls: "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400", icon: Clock },
   assigned: { label: "Covered", cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400", icon: CheckCircle2 },
+  cancelled: { label: "Cancelled", cls: "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400", icon: Ban },
 };
 
 export default function SubstitutionsPage() {
@@ -31,6 +33,8 @@ export default function SubstitutionsPage() {
   const [mark, setMark] = useState({ teacher_id: "", date: today(), reason: "" });
   const [expanded, setExpanded] = useState({});
   const [sugFor, setSugFor] = useState(null); // substitution row for suggestions modal
+  const [cancelFor, setCancelFor] = useState(null);
+  const [tick, setTick] = useState(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -40,7 +44,7 @@ export default function SubstitutionsPage() {
         api.get("/absences", { params: { status: "requested" } }),
       ]);
       setDash(d.data);
-      setAbsences(a.data.absences.filter((x) => x.status === "approved"));
+      setAbsences(a.data.absences.filter((x) => x.status === "approved" || x.status === "cancelled"));
       setPending(p.data.absences);
     } catch (e) { toast.error(errText(e)); }
   }, [date]);
@@ -115,7 +119,8 @@ export default function SubstitutionsPage() {
         ) : absences.map((a) => (
           <AbsenceRow key={a.id} absence={a} expanded={!!expanded[a.id]}
             onToggle={() => setExpanded((e) => ({ ...e, [a.id]: !e[a.id] }))}
-            onAuto={() => autoAssign(a.id)} onSuggest={(sub) => setSugFor(sub)} refreshKey={date} />
+            onAuto={() => autoAssign(a.id)} onSuggest={(sub) => setSugFor(sub)} refreshKey={`${date}-${tick}`}
+            onCancel={() => setCancelFor(a)} onChanged={() => { setTick((t) => t + 1); refresh(); }} />
         ))}
       </div>
 
@@ -149,7 +154,8 @@ export default function SubstitutionsPage() {
         </DialogContent>
       </Dialog>
 
-      {sugFor && <SuggestDialog sub={sugFor} onClose={() => setSugFor(null)} onDone={() => { setSugFor(null); refresh(); }} />}
+      {sugFor && <SuggestDialog sub={sugFor} onClose={() => setSugFor(null)} onDone={() => { setSugFor(null); setTick((t) => t + 1); refresh(); }} />}
+      {cancelFor && <CancelAbsenceDialog absence={cancelFor} onClose={() => setCancelFor(null)} onDone={() => { setCancelFor(null); setTick((t) => t + 1); refresh(); }} />}
     </div>
   );
 }
@@ -171,7 +177,13 @@ const Chip = ({ status }) => {
   return <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${s.cls}`}><I size={11} /> {s.label}</span>;
 };
 
-const AbsenceRow = ({ absence, expanded, onToggle, onAuto, onSuggest, refreshKey }) => {
+const AbsenceRow = ({ absence, expanded, onToggle, onAuto, onSuggest, refreshKey, onCancel, onChanged }) => {
+  const cancelled = absence.status === "cancelled";
+  const removeCover = async (s) => {
+    if (!window.confirm(`Remove the cover for ${s.period_label || `P${s.period_no}`} ${s.class_name} ${s.section}? ${s.status === "assigned" ? s.substitute_name : "The asked teachers"} will be notified.`)) return;
+    try { await api.post(`/substitutions/${s.id}/remove-cover`, {}); toast.success("Cover removed — back to Needs cover"); onChanged(); }
+    catch (e) { toast.error(errText(e)); }
+  };
   const [subs, setSubs] = useState(null);
   const load = useCallback(() => {
     api.get(`/absences/${absence.id}`).then((r) => setSubs(r.data.substitutions)).catch(() => setSubs([]));
@@ -187,9 +199,21 @@ const AbsenceRow = ({ absence, expanded, onToggle, onAuto, onSuggest, refreshKey
           {expanded ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
           <span className="font-medium text-slate-800 dark:text-slate-200">{absence.teacher_name}</span>
           {absence.reason && <span className="text-sm text-slate-400">· {absence.reason}</span>}
+          {cancelled && <Chip status="cancelled" />}
         </button>
-        <Button size="sm" variant="outline" onClick={onAuto} data-testid={`auto-assign-${absence.id}`}><Zap size={13} className="mr-1" /> Auto-cover all</Button>
+        {!cancelled && (
+          <span className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={onAuto} data-testid={`auto-assign-${absence.id}`}><Zap size={13} className="mr-1" /> Auto-cover all</Button>
+            <Button size="sm" variant="ghost" className="text-red-600" onClick={onCancel} data-testid={`cancel-absence-${absence.id}`}><Ban size={13} className="mr-1" /> Cancel absence</Button>
+          </span>
+        )}
       </div>
+      {cancelled && (
+        <p className="px-5 pb-3 -mt-1 text-xs text-slate-500" data-testid={`cancelled-info-${absence.id}`}>
+          Cancelled by {absence.cancelled_by_name || "—"} · {(absence.cancelled_at || "").slice(0, 16).replace("T", " ")} · {absence.cancel_reason}
+          {absence.kept_periods?.length > 0 && ` · kept as history: ${absence.kept_periods.map((p) => `P${p}`).join(", ")}`}
+        </p>
+      )}
       {expanded && (
         <div className="border-t border-slate-100 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800/60">
           {subs === null ? <p className="px-5 py-4 text-sm text-slate-400">Loading…</p>
@@ -197,14 +221,21 @@ const AbsenceRow = ({ absence, expanded, onToggle, onAuto, onSuggest, refreshKey
             : subs.map((s) => (
               <div key={s.id} className="flex items-center justify-between px-5 py-3 text-sm" data-testid={`sub-${s.id}`}>
                 <div className="flex items-center gap-3">
-                  <span className="font-mono text-xs bg-slate-100 dark:bg-slate-800 rounded px-1.5 py-0.5">P{s.period_no}</span>
+                  <span className="font-mono text-xs bg-slate-100 dark:bg-slate-800 rounded px-1.5 py-0.5" title={`Slot ${s.period_no}`}>{s.period_label || `P${s.period_no}`}</span>
                   <span className="text-slate-700 dark:text-slate-200">{s.class_name} {s.section} · {s.subject}</span>
                   <Chip status={s.status} />
                   {s.substitute_name && <span className="text-xs text-emerald-600">→ {s.substitute_name}</span>}
                 </div>
-                <Button size="sm" variant="outline" onClick={() => onSuggest(s)} data-testid={`cover-${s.id}`}>
-                  <Users2 size={13} className="mr-1" /> {s.status === "assigned" ? "Change" : "Find cover"}
-                </Button>
+                {s.status !== "cancelled" && !cancelled && (
+                  <span className="flex items-center gap-1.5">
+                    {(s.status === "assigned" || s.status === "requested") && (
+                      <Button size="sm" variant="ghost" className="text-slate-500" onClick={() => removeCover(s)} data-testid={`remove-cover-${s.id}`}><Undo2 size={13} className="mr-1" /> Remove cover</Button>
+                    )}
+                    <Button size="sm" variant="outline" onClick={() => onSuggest(s)} data-testid={`cover-${s.id}`}>
+                      <Users2 size={13} className="mr-1" /> {s.status === "assigned" ? "Change" : "Find cover"}
+                    </Button>
+                  </span>
+                )}
               </div>
             ))}
         </div>

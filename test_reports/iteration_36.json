@@ -1,0 +1,22 @@
+{
+  "summary": "Phase 52 (substitution cancel/remove-cover + portal substitute notice) tested end-to-end on Sunrise demo. Backend pytest: tests/test_phase52.py 4/4 PASS; regressions tests/test_phase10.py 11/11 PASS. All 4 new endpoints registered in /api/openapi.json (/api/absences/{id}/cancel-preview, /api/absences/{id}/cancel, /api/substitutions/{sub_id}/remove-cover, /api/parent/child/{student_id}/timetable). UI admin: Oct 13 Arjun Pillai row shows 'Cancel absence' (cancel-absence-<id>); dialog opens with 'No upcoming periods to change', 'Already started — kept as history: P4, P5, P7, P8', cancel-reason-input + cancel-absence-confirm disabled until >=3 chars (verified empty→disabled, 2ch→disabled, 15ch→enabled). Did NOT confirm Arjun cancel. Oct 14 Rahul Nair shows Cancelled badge + cancelled-info-<id>: 'Cancelled by Anitha Varghese · 2026-10-13 12:37 · Appointment moved to Saturday — Rahul will be in school'. Full future-date flow verified: Mark absent Suresh Kumar 2026-10-21 → 3 periods (P4 G8B, P5 G8A, P7 G5A) → Find cover P4 → Assign Sindhu Raghavan (Covered toast) → Remove cover (remove-cover-<subId>) → 'Cover removed — back to Needs cover' toast, back to Needs cover state → Cancel absence with reason → 'Absence cancelled · 3 cover(s) cancelled' toast, all 3 periods Cancelled chip, cancelled-info line visible. Teacher Fathima: /teacher/substitutions → Request leave 2026-10-28 → requested + Cancel leave (cancel-my-leave-<id>) → dialog opens → confirm → status=cancelled. Student aarav@: dashboard portal-today-changes='Today's changes: 1 period has a substitute teacher today', portal-today-cover-7='Substitute: Thomas Mathew'; Timetable page portal-tt-changes + portal-tt-cover-tue-7 both present. Parent parent.menon@: parent-today-tt card, parent-today-changes + parent-today-cover-7='Substitute: Thomas Mathew' (desktop 1920x1080 AND mobile 390x844). Arjun's Oct-13 absence + P7 Thomas cover untouched (demo screenshots preserved).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_phase52.py",
+    "/app/backend/tests/test_phase10.py",
+    "/app/test_reports/pytest/phase52.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py still uses deprecated @app.on_event('startup'/'shutdown') (lines ~13146/13171/13297) — emits DeprecationWarnings; migrate to lifespan context before next FastAPI major upgrade (same note from iter 35, unresolved)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (4/4 phase52 + 11/11 phase10 regression)", "frontend": "100% of tested flows"},
+  "test_credentials": "Sunrise: admin@sunrise-demo.in / Sunrise@2026; fathima@sunrise-demo.in / Sunrise@2026; aarav@sunrise-demo.in / Sunrise@2026; parent.menon@sunrise-demo.in / Sunrise@2026. See /app/memory/test_credentials.md",
+  "seed_data_creation": "Created a test absence (Suresh Kumar · 2026-10-21 · 'Test absence E1 QA') and immediately CANCELLED it in-flow (cover-removed and absence-cancelled). Fathima created and cancelled own leave for 2026-10-28. All demo-critical state preserved (Arjun Pillai 2026-10-13 active absence + Thomas Mathew P7 cover untouched; Rahul Nair 2026-10-14 cancelled record intact).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Phase 52 fully green. Demo state preserved: Arjun Pillai 2026-10-13 absence active (DO NOT cancel), Rahul Nair 2026-10-14 cancelled, Thomas Mathew assigned to Grade 8 A P7 Computer Science (2026-10-13). Server clock ~2026-10-13 ~18:00 IST — today's periods are not cancellable (intended). For future retest of cancel/remove-cover flows, use dates >= 2026-10-20 (weekdays) with teachers Suresh Kumar / Deepa Krishnan who have timetable entries. Comm engine in STUB mode (messages logged in db.messages, nothing sent). LPGS and p50demo untouched. Teacher's own-leave cancel endpoint reachable at same /api/absences/{id}/cancel with role=teacher; UI uses cancel-my-leave-<id> testid on /teacher/substitutions.",
+  "rca of the issue": "N/A — no bugs found."
+}

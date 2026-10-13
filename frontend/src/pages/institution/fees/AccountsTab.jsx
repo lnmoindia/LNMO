@@ -185,7 +185,7 @@ export default function AccountsTab({ readOnly, canCollect }) {
     <div className="space-y-3 pt-2" data-testid="fees-accounts-tab">
       <div className="flex flex-wrap gap-2">
         <select className={sel} value={sid} onChange={(e) => setSid(e.target.value)} data-testid="fee-accounts-structure">
-          <option value="">All structures</option>{structures.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
+          <option value="">All structures</option>{structures.map((s) => <option key={s.id} value={s.id}>{s.name}{s.archived ? " (archived)" : ""}</option>)}</select>
         <select className={sel} value={cls} onChange={(e) => setCls(e.target.value)} data-testid="fee-accounts-class">
           <option value="">All classes</option>{classes.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select>
         {!readOnly && cls && <Button variant="outline" onClick={remindClass} data-testid="fee-remind-class-btn"><BellRing size={14} className="mr-1.5" /> Remind {cls}</Button>}

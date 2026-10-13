@@ -43,7 +43,6 @@ import TeacherShell from "./components/layout/TeacherShell";
 import PrincipalsPage from "./pages/institution/PrincipalsPage";
 import PrincipalDashboard from "./pages/principal/PrincipalDashboard";
 import { AdminOnly, AdminOrPrincipal } from "./components/common/RoleGuards";
-import ApplyPresetCards from "./components/common/ApplyPresetCards";
 import AttendancePage from "./pages/AttendancePage";
 import MarksEntryPage from "./pages/MarksEntryPage";
 import AssessmentsPage from "./pages/institution/AssessmentsPage";
@@ -118,11 +117,11 @@ function App() {
             <Route path="/setup/parent/:token" element={<ParentSetupPage />} />
             <Route path="/change-password" element={<Protected><ChangePasswordPage /></Protected>} />
             <Route
-              path="/portal"
+              path="/portal/*"
               element={<Protected roles={["student", "staff"]}><StudentPortal /></Protected>}
             />
             <Route path="/portal-coming-soon" element={<Navigate to="/portal" replace />} />
-            <Route path="/parents" element={<Protected roles={["parent"]}><ParentPortal /></Protected>} />
+            <Route path="/parents/*" element={<Protected roles={["parent"]}><ParentPortal /></Protected>} />
 
             <Route
               path="/platform"
@@ -168,7 +167,7 @@ function App() {
               <Route path="sections" element={<Navigate to="/app/class-hub" replace />} />
               <Route path="subjects" element={<ResourcePage {...subjectsConfig} headerExtra={({ reload }) => <SubjectImportButton onDone={reload} />} />} />
               <Route path="academic-years" element={<AdminOnly><ResourcePage {...academicYearsConfig} /></AdminOnly>} />
-              <Route path="academic-units" element={<AdminOnly><ResourcePage {...academicUnitsConfig} headerExtra={({ reload }) => <ApplyPresetCards compact onApplied={reload} />} /></AdminOnly>} />
+              <Route path="academic-units" element={<AdminOnly><ResourcePage {...academicUnitsConfig} /></AdminOnly>} />
               <Route path="promotion" element={<AdminOrPrincipal><PromotionPage /></AdminOrPrincipal>} />
               <Route path="fees" element={<AdminOrPrincipal><FeesPage /></AdminOrPrincipal>} />
               <Route path="enrollments" element={<Navigate to="/app/class-hub" replace />} />

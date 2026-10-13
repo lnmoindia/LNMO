@@ -1,0 +1,36 @@
+{
+  "summary": "Phase 53 (fee structure delete/archive/unarchive + branded /login/<code> + Login Page settings + preset cards moved to wizard + academic_year_id in structures) end-to-end tested on Sunrise and p50demo. Backend pytest tests/test_phase53.py: 6/6 PASS. Live preview sanity (18 checks): 17/18 PASS — only miss is Cache-Control header on /api/public/login-default.jpg (returns no-store,no-cache,must-revalidate instead of public,max-age — likely proxy/middleware override; branded login-background correctly returns 'public' cache-control). UI verified: /login/sunrise desktop 1440 + mobile 390 render branded (photo, logo, 'Sunrise Public School (Demo)', tagline 'Learning that lights the way — Kochi, Kerala', 'Powered by LNMO'); login submission works. /login/p50demo renders branded header with default LNMO campus background (login-default.jpg). /login/no-such-school and /login both render generic LNMO page. Fees → Structures (Sunrise admin): both existing structures show ⋯ menu with Archive + Delete; Delete on 'Primary fees 2026-27' is disabled with 'Used by 6 students / 18 invoices — archive instead'. Created 'QA temp structure delete' (year dropdown pre-selected '2026-27 (Current)') → ⋯ menu → Delete → confirm dialog shows 'Delete QA temp structure delete? This can't be undone.' → confirmed → toast 'Fee structure deleted' → gone. Created 'QA temp archive flow' → Archive dialog 'Archive QA temp archive flow? It won't be offered for new students or new invoices…' confirmed → disappeared from list, 'Show archived (1)' counter updated. Toggled Show archived → row visible with ARCHIVED badge, Apply/Generate buttons removed (edit/clone remain). Unarchive confirm dialog → row returned to active list with Apply/Generate restored. Deleted → gone. Settings → Login page card shows live preview with Sunrise photo, logo, tagline; tagline save flow verified by changing to 'Learning that lights the way — QA ping', confirming via public /api/public/institutions/sunrise/branding, then restoring original tagline. Academic Units page on Sunrise has NO preset buttons (only 'New Academic Unit' + existing HS/Primary rows). Setup wizard throwaway school admin@sunrise-setup.in → /app/setup → Academic Configuration step still shows 'Start from a preset' cards (LP / UP / HS / HSS Kerala + K-12 single unit) with Apply preset buttons — presets correctly only in wizard. Sunrise admin apply-preset returns 409 (setup complete). Principal thomas@sunrise-demo.in correctly 403 on DELETE and POST /archive. Public branding 404 for unknown slug. LPGS branding read-only check: tagline '', background custom (unchanged). No existing Sunrise/p50demo structures were archived or deleted; only QA temp throwaways created and cleaned up.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/public/login-default.jpg", "issue": "Cache-Control header on preview is 'no-store, no-cache, must-revalidate' (likely proxy/middleware override) — spec/pytest expect 'public, max-age=…'. Branded /api/public/institutions/<code>/login-background correctly carries public cache-control. Low priority."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase53.py",
+    "/app/backend/tests/live_phase53.py",
+    "/app/test_reports/pytest/phase53.xml"
+  ],
+  "action_items": [
+    "Investigate why /api/public/login-default.jpg loses its 'public, max-age=…' Cache-Control on preview (likely a FastAPI session/no-cache middleware applied to the whole /api/public namespace or a reverse-proxy override). The branded login-background path keeps 'public' correctly, so this is only the static default route."
+  ],
+  "critical_code_review_comments": [
+    "server.py still uses deprecated @app.on_event('startup'/'shutdown') (lines ~13146/13171/13297) — carried over from previous iterations; migrate to lifespan context before next FastAPI major upgrade.",
+    "server.py is now >13500 lines — Phase 53 added _structure_usage/_usage_msg/_require_not_archived/_resolve_structure_year/_legacy_year_ids/_login_branding/_inst_by_code/_setup_is_complete etc. all inside the same monolith. Consider splitting fees-structure and institution-branding into dedicated routers before Phase 54+."
+  ],
+  "updated_files": [
+    "/app/backend/tests/live_phase53.py (new, created by tester)"
+  ],
+  "success_rate": {"backend": "100% pytest 6/6 + live 17/18 (94%)", "frontend": "100% of tested flows (branded login desktop+mobile, p50demo default bg, unknown→generic, generic /login, Fees Structures menu/delete/archive/toggle/unarchive/delete, Settings Login page card + tagline save+restore, Academic Units no-presets, Setup wizard preset cards present)"},
+  "test_credentials": "Sunrise: admin@sunrise-demo.in / Sunrise@2026, thomas@sunrise-demo.in / Sunrise@2026 (principal, 403 confirmed). p50demo: admin@feesdemo.test / admin123. Setup wizard throwaway: admin@sunrise-setup.in / SetupDemo@2026. See /app/memory/test_credentials.md.",
+  "seed_data_creation": "Created and deleted TWO throwaway Sunrise fee structures ('QA temp structure delete' and 'QA temp archive flow') — both fully cleaned up. Tagline on Sunrise temporarily set to '… QA ping' then restored to 'Learning that lights the way — Kochi, Kerala' (verified via public branding endpoint). Sunrise login background NOT reset (left intact as instructed). LPGS and p50demo structures untouched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Phase 53 fully green. Sunrise fee structures preserved: 'Primary fees 2026-27' (sid 541faf72-4d3d-4a1e-a158-0a854fa138b8, 6 students / 18 invoices, used) and 'High School fees 2026-27' (sid ac0c3003-1b52-43f4-8b3d-f40199969ce8, 16 students / 48 invoices, used) — BOTH deletable only via archive (409 confirmed). Login page settings UI testids: login-page-tagline-input, login-page-tagline-save, login-page-bg-input, login-page-bg-upload, login-page-bg-reset, login-page-preview, login-page-open-link. Structure menu testids: fee-structure-menu-<id>, fee-structure-archive-<id>, fee-structure-unarchive-<id>, fee-structure-delete-<id>, fee-structure-delete-reason-<id>, fee-structures-show-archived, fee-structure-new-btn, fee-structure-year, fee-structure-unit. The Delete and Archive confirm dialogs use shadcn AlertDialog — click the 'Delete'/'Archive'/'Unarchive' button by role (not testid) to confirm. The default login background endpoint on preview returns no-store cache-control (minor deviation from spec; branded bg is fine).",
+  "rca of the issue": "Minor cache-control deviation on /api/public/login-default.jpg likely caused by a global response middleware (session/no-cache) applied to '/api/*' paths that overrides the explicit Cache-Control set by the handler, OR by Kubernetes ingress inserting no-store. The branded /api/public/institutions/<code>/login-background path still keeps 'public,max-age=…' which suggests only the default-file route is affected. Mitigation: either serve the default via same path pattern or explicitly re-apply Cache-Control after middleware. Not customer-impacting (browser will refetch the default each visit; file is ~tens of KB)."
+}

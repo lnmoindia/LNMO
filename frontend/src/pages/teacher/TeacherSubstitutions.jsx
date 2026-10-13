@@ -3,6 +3,7 @@ import { UserX, CalendarRange, Check, X, Plus, CheckCircle2, Clock } from "lucid
 import { toast } from "sonner";
 import api, { errText } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
+import { CancelAbsenceDialog } from "../../components/substitutions/CancelAbsenceDialog";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import {
@@ -16,6 +17,7 @@ export default function TeacherSubstitutions() {
   const [data, setData] = useState({ assigned: [], requests: [] });
   const [mine, setMine] = useState([]);
   const [leaveOpen, setLeaveOpen] = useState(false);
+  const [cancelFor, setCancelFor] = useState(null);
   const [leave, setLeave] = useState({ date: today(), reason: "" });
 
   const refresh = useCallback(async () => {
@@ -101,12 +103,16 @@ export default function TeacherSubstitutions() {
                 <span className="text-slate-700 dark:text-slate-200">{a.date}</span>
                 {a.reason && <span className="text-slate-400">· {a.reason}</span>}
                 <span className={`text-xs px-2 py-0.5 rounded-full ${a.status === "approved" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400" : a.status === "requested" ? "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400" : "bg-slate-100 text-slate-500 dark:bg-slate-800"}`}>{a.status}</span>
+                {(a.status === "requested" || a.status === "approved") && a.date > today() && (
+                  <Button size="sm" variant="ghost" className="h-7 text-red-600" onClick={() => setCancelFor(a)} data-testid={`cancel-my-leave-${a.id}`}>Cancel leave</Button>
+                )}
               </li>
             ))}
           </ul>
         )}
       </section>
 
+      {cancelFor && <CancelAbsenceDialog absence={{ ...cancelFor, teacher_name: user?.name }} onClose={() => setCancelFor(null)} onDone={() => { setCancelFor(null); refresh(); }} />}
       <Dialog open={leaveOpen} onOpenChange={setLeaveOpen}>
         <DialogContent className="sm:max-w-md" data-testid="leave-dialog">
           <DialogHeader>

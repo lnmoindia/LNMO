@@ -253,7 +253,7 @@ async def _login_school(payload: dict):
     slug = (payload.get("slug") or "").strip().lower()
     domain = (payload.get("domain") or "").strip().lstrip("@").lower()
     if slug:
-        inst = await db.institutions.find_one({"$or": [{"slug": slug}, {"code": slug.upper()}]}, {"_id": 0, "id": 1})
+        inst = await db.institutions.find_one({"$or": [{"slug": slug}, {"code": slug.upper()}, {"domain": slug}]}, {"_id": 0, "id": 1})
         if inst:
             return inst["id"]
     if domain:
@@ -937,6 +937,8 @@ async def update_academic_config(payload: dict = Body(...),
                                                {"$set": updates, "$setOnInsert": {"id": str(uuid.uuid4()),
                                                                                   "created_at": now_iso()}}, upsert=True)
     created = 0
+    if payload.get("apply_presets") and await _setup_is_complete(iid):
+        raise HTTPException(status_code=409, detail=PRESET_LOCKED)
     if payload.get("apply_presets"):
         preset = ACADEMIC_UNIT_PRESETS.get(payload.get("school_model"), [])
         existing = {u["code"] async for u in db.academic_units.find({"institution_id": iid}, {"code": 1})}
@@ -975,6 +977,8 @@ async def apply_academic_preset(body: ApplyPresetRequest,
     """Merge a structural preset: create only missing units/grades/sections (case-insensitive
     match by unit name and class name). Never duplicates or deletes. Idempotent."""
     iid = user["institution_id"]
+    if await _setup_is_complete(user["institution_id"]):
+        raise HTTPException(status_code=409, detail=PRESET_LOCKED)
     spec = PHASE5_PRESETS[body.preset]
 
     ex_units = {}
@@ -1022,6 +1026,17 @@ async def apply_academic_preset(body: ApplyPresetRequest,
 
     await audit(user, "apply_preset", "academic_config", iid, body.preset)
     return {"preset": body.preset, "summary": summary}
+
+
+async def _setup_is_complete(iid):
+    async def has(col):
+        return await db[col].count_documents({"institution_id": iid}, limit=1) > 0
+    inst = await db.institutions.find_one({"id": iid}, {"_id": 0, "contact_email": 1, "phone": 1}) or {}
+    return bool(inst.get("contact_email") and inst.get("phone")) and await has("academic_configuration") \
+        and all([await has(c) for c in ("academic_years", "academic_units", "classes", "sections", "subjects")])
+
+
+PRESET_LOCKED = "Presets are only available while the setup wizard is in progress — add or edit academic units individually instead"
 
 
 @api.get("/institution/setup-status")
@@ -3380,34 +3395,181 @@ async def reject_absence(absence_id: str, user: dict = Depends(require_admin_or_
     return {"ok": True}
 
 
-@api.post("/absences/{absence_id}/cancel")
-async def cancel_absence(absence_id: str, user: dict = Depends(get_current_user)):
+# ---------------- Phase 52: cancel absence / remove single cover (past periods kept as history) ----------------
+
+class CancelAbsenceRequest(BaseModel):
+    reason: str = PField(..., min_length=3, max_length=300)
+
+
+class RemoveCoverRequest(BaseModel):
+    reason: Optional[str] = PField(default="", max_length=300)
+
+
+async def _sub_now(iid):
+    return datetime.now(await _inst_tz(iid))
+
+
+async def _period_start_dt(iid, academic_year, class_name, date, period_no):
+    """Start of a period on a date, in the institution timezone (date start if the bell has no time)."""
+    import datetime as _dt
+    tz = await _inst_tz(iid)
+    cls = await db.classes.find_one({"institution_id": iid, "name": class_name}, {"_id": 0, "academic_unit_id": 1}) or {}
+    cfg = await effective_tt_config(iid, academic_year, cls.get("academic_unit_id"))
+    start = ""
+    if 1 <= period_no <= len(cfg["periods"]):
+        start = cfg["periods"][period_no - 1].get("start") or ""
+    try:
+        hh, mm = (int(x) for x in start.split(":")[:2])
+    except ValueError:
+        hh, mm = 0, 0
+    return _dt.datetime.combine(_dt.date.fromisoformat(date), _dt.time(hh, mm), tzinfo=tz)
+
+
+async def _sub_cancellable(iid, sub, now=None):
+    now = now or await _sub_now(iid)
+    return await _period_start_dt(iid, sub["academic_year"], sub["class_name"], sub["date"], sub["period_no"]) > now
+
+
+async def _notify_and_stub(iid, uid, ntype, title, body, related_id, actor=None, module="substitution"):
+    """In-app bell + one STUB/test-mode SMS via the comm engine (bell only when no phone or channel refused)."""
+    await _notify(iid, uid, ntype, title, body, related_id)
+    u = await db.users.find_one({"id": uid, "institution_id": iid}, {"_id": 0, "name": 1, "phone": 1})
+    phone = _norm_phone((u or {}).get("phone"))
+    if not phone:
+        return "bell_only_no_phone"
+    try:
+        res = await send_message(iid, "sms", [{"name": u.get("name"), "phone": phone, "body": f"{title}: {body}"}],
+                                 module=module, meta={"related_id": related_id}, actor=actor)
+        return "sent" if res.get("sent") else "bell_only_failed"
+    except HTTPException:
+        return "bell_only_failed"
+
+
+async def _period_label(iid, academic_year, class_name, period_no):
+    """Bell label for a 1-based slot index (slots include breaks, e.g. slot 7 → "P5")."""
+    cls = await db.classes.find_one({"institution_id": iid, "name": class_name}, {"_id": 0, "academic_unit_id": 1}) or {}
+    periods = (await effective_tt_config(iid, academic_year, cls.get("academic_unit_id")))["periods"]
+    return periods[period_no - 1].get("label") if 1 <= period_no <= len(periods) else f"P{period_no}"
+
+
+async def _sub_label(s):
+    return f"{s['class_name']} {s.get('section') or ''}".strip() + " " + await _period_label(s["institution_id"], s["academic_year"], s["class_name"], s["period_no"])
+
+
+async def _absence_cancel_guard(user, ab):
+    is_admin = user.get("role") == "institution_admin"
+    pa = await active_principal(user)
+    own = ab["teacher_id"] == user["id"]
+    if is_admin:
+        return
+    if pa and (own or await _absence_in_scope(user, ab["teacher_id"])):
+        return
+    if pa and not own:
+        raise HTTPException(status_code=403, detail="That teacher is outside your assigned scope")
+    if not own:
+        raise HTTPException(status_code=403, detail="Access denied")
+    # a teacher may cancel their own leave only before it starts
+    first = await _period_start_dt(user["institution_id"], ab["academic_year"], "", ab["date"], 1)
+    if first <= await _sub_now(user["institution_id"]):
+        raise HTTPException(status_code=400, detail="This leave has already started — ask your principal or admin")
+
+
+async def _cancel_preview(iid, ab):
+    now = await _sub_now(iid)
+    subs = await db.substitutions.find({"institution_id": iid, "absence_id": ab["id"], "status": {"$ne": "cancelled"}},
+                                       {"_id": 0}).sort("period_no", 1).to_list(200)
+    rows = []
+    for s in subs:
+        rows.append({"id": s["id"], "period_no": s["period_no"], "class_name": s["class_name"], "section": s.get("section"),
+                     "period_label": await _period_label(iid, s["academic_year"], s["class_name"], s["period_no"]),
+                     "subject": s["subject"], "status": s["status"], "substitute_name": s.get("substitute_name"),
+                     "asked": len(s.get("requested_teacher_ids") or []), "cancellable": await _sub_cancellable(iid, s, now)})
+    canc = [r for r in rows if r["cancellable"]]
+    return {"absence": ab, "periods": rows,
+            "assigned_count": sum(1 for r in canc if r["status"] == "assigned"),
+            "asked_count": sum(r["asked"] for r in canc if r["status"] == "requested"),
+            "kept_periods": [r["period_no"] for r in rows if not r["cancellable"]]}
+
+
+@api.get("/absences/{absence_id}/cancel-preview")
+async def absence_cancel_preview(absence_id: str, user: dict = Depends(get_current_user)):
     iid = user["institution_id"]
     ab = await db.absences.find_one({"id": absence_id, "institution_id": iid}, {"_id": 0})
     if not ab:
         raise HTTPException(status_code=404, detail="Absence not found")
-    is_admin = user.get("role") == "institution_admin"
-    pa = await active_principal(user)
-    if not is_admin and not pa and ab["teacher_id"] != user["id"]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    if pa and not is_admin and ab["teacher_id"] != user["id"] and not await _absence_in_scope(user, ab["teacher_id"]):
-        raise HTTPException(status_code=403, detail="Outside your assigned scope")
-    await db.absences.update_one({"id": absence_id}, {"$set": {"status": "cancelled"}})
-    # CASCADE: cancel every linked substitution (open/requested/assigned) and close pending asks.
-    cancelled = 0
-    async for s in db.substitutions.find({"institution_id": iid, "absence_id": absence_id,
-                                          "status": {"$ne": "cancelled"}}, {"_id": 0}):
+    await _absence_cancel_guard(user, ab)
+    return await _cancel_preview(iid, ab)
+
+
+@api.post("/absences/{absence_id}/cancel")
+async def cancel_absence(absence_id: str, body: CancelAbsenceRequest, user: dict = Depends(get_current_user)):
+    """Cancel an absence: future covers/asks → cancelled (never deleted), substitutes + original teacher
+    notified (bell + STUB SMS). Periods that have already started stay as history."""
+    iid = user["institution_id"]
+    ab = await db.absences.find_one({"id": absence_id, "institution_id": iid}, {"_id": 0})
+    if not ab:
+        raise HTTPException(status_code=404, detail="Absence not found")
+    await _absence_cancel_guard(user, ab)
+    if ab["status"] not in ("requested", "approved"):
+        raise HTTPException(status_code=400, detail=f"Absence is already {ab['status']}")
+    reason = body.reason.strip()
+    if len(reason) < 3:
+        raise HTTPException(status_code=400, detail="Give a reason (3–300 characters)")
+    prev = await _cancel_preview(iid, ab)
+    tname = ab.get("teacher_name") or "The teacher"
+    cancelled, notified = 0, 0
+    for row in prev["periods"]:
+        if not row["cancellable"]:
+            continue
+        s = await db.substitutions.find_one({"id": row["id"]}, {"_id": 0})
+        msg = f"Cover for {await _sub_label(s)} on {s['date']} is cancelled — {tname} is back"
+        targets = set(s.get("requested_teacher_ids") or [])
         if s.get("substitute_teacher_id"):
-            await _notify(iid, s["substitute_teacher_id"], "sub_cancelled", "Cover cancelled",
-                          f"The {s['class_name']} {s.get('section') or ''} {s['subject']} (P{s['period_no']}) cover on {s['date']} is no longer needed", s["id"])
-        for tid in (s.get("requested_teacher_ids") or []):
-            await _notify(iid, tid, "sub_request_closed", "Cover request withdrawn",
-                          f"The cover request for {s['class_name']} {s.get('section') or ''} (P{s['period_no']}) on {s['date']} was withdrawn", s["id"])
+            targets.add(s["substitute_teacher_id"])
+        for tid in targets:
+            await _notify_and_stub(iid, tid, "sub_cancelled", "Cover cancelled", msg, s["id"], actor=user)
+            notified += 1
         await db.substitutions.update_one({"id": s["id"]}, {"$set": {
-            "status": "cancelled", "requested_teacher_ids": [], "updated_at": now_iso()}})
+            "status": "cancelled", "previous_status": s["status"], "cancelled_at": now_iso(), "cancelled_by": user["id"],
+            "cancel_reason": reason, "updated_at": now_iso()}})
         cancelled += 1
-    await audit(user, "cancel_absence", "absences", absence_id, f"{ab.get('teacher_name')} · {cancelled} sub(s) cancelled")
-    return {"ok": True, "substitutions_cancelled": cancelled}
+    await db.absences.update_one({"id": absence_id}, {"$set": {
+        "status": "cancelled", "cancelled_at": now_iso(), "cancelled_by": user["id"], "cancelled_by_name": user.get("name"),
+        "cancel_reason": reason, "kept_periods": prev["kept_periods"]}})
+    if ab["teacher_id"] != user["id"]:
+        await _notify_and_stub(iid, ab["teacher_id"], "absence_cancelled", "Absence cancelled",
+                               f"Your absence on {ab['date']} was cancelled — you are back on your timetable", absence_id, actor=user)
+    await audit(user, "cancel_absence", "absences", absence_id,
+                f"{tname} · {ab['date']} · {cancelled} cover(s) cancelled, {len(prev['kept_periods'])} kept · {reason}")
+    return {"ok": True, "substitutions_cancelled": cancelled, "notified": notified, "kept_periods": prev["kept_periods"]}
+
+
+@api.post("/substitutions/{sub_id}/remove-cover")
+async def remove_cover(sub_id: str, body: RemoveCoverRequest = Body(default=RemoveCoverRequest()),
+                       user: dict = Depends(require_admin_or_principal)):
+    """Remove one period's substitute (or withdraw its asks): back to Needs cover; notifies only that substitute."""
+    iid = user["institution_id"]
+    s = await db.substitutions.find_one({"id": sub_id, "institution_id": iid}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Substitution not found")
+    await guard_principal_class(user, s["class_name"])
+    if s["status"] not in ("assigned", "requested"):
+        raise HTTPException(status_code=400, detail="This period has no cover to remove")
+    if not await _sub_cancellable(iid, s):
+        raise HTTPException(status_code=400, detail="This period has already started — it is kept as history")
+    msg = f"Cover for {await _sub_label(s)} on {s['date']} is cancelled — you are no longer needed"
+    targets = [s["substitute_teacher_id"]] if s["status"] == "assigned" and s.get("substitute_teacher_id") \
+        else list(s.get("requested_teacher_ids") or [])
+    for tid in targets:
+        await _notify_and_stub(iid, tid, "sub_cancelled", "Cover cancelled", msg, s["id"], actor=user)
+    hist = list(s.get("cover_history") or []) + [{"action": "removed", "status": s["status"], "teacher_id": s.get("substitute_teacher_id"),
+                                                  "teacher_name": s.get("substitute_name"), "by": user["id"],
+                                                  "reason": (body.reason or "").strip(), "at": now_iso()}]
+    await db.substitutions.update_one({"id": sub_id}, {"$set": {
+        "status": "open", "substitute_teacher_id": None, "substitute_name": None, "requested_teacher_ids": [],
+        "responses": {}, "cover_history": hist, "updated_at": now_iso()}})
+    await audit(user, "remove_cover", "substitutions", sub_id, f"{await _sub_label(s)} {s['date']} · {s.get('substitute_name') or 'asks withdrawn'}")
+    return {"ok": True, "notified": len(targets)}
 
 
 def _scope_sub_query(iid, scope):
@@ -3454,6 +3616,8 @@ async def absence_detail(absence_id: str, user: dict = Depends(require_admin_or_
     if scope and not scope["whole_school"]:
         names = set(scope["class_names"] or [])
         subs = [s for s in subs if s["class_name"] in names]
+    for s in subs:
+        s["period_label"] = await _period_label(iid, s["academic_year"], s["class_name"], s["period_no"])
     return {"absence": ab, "substitutions": subs}
 
 
@@ -3701,7 +3865,7 @@ async def substitutions_dashboard(date: str = "", user: dict = Depends(require_a
 async def my_substitutions(user: dict = Depends(require_roles("institution_admin", "teacher"))):
     iid = user["institution_id"]
     assigned = await db.substitutions.find(
-        {"institution_id": iid, "substitute_teacher_id": user["id"]}, {"_id": 0}).sort([("date", -1), ("period_no", 1)]).to_list(500)
+        {"institution_id": iid, "substitute_teacher_id": user["id"], "status": "assigned"}, {"_id": 0}).sort([("date", -1), ("period_no", 1)]).to_list(500)
     requests = await db.substitutions.find(
         {"institution_id": iid, "status": "requested", "requested_teacher_ids": user["id"]}, {"_id": 0}).sort([("date", 1), ("period_no", 1)]).to_list(500)
     return {"assigned": assigned, "requests": requests}
@@ -3756,7 +3920,134 @@ async def portal_timetable(user: dict = Depends(require_roles("student"))):
          "section": student.get("section"), "status": "active", **PUBLISHED_MATCH}, {"_id": 0}).to_list(500)
     entries = [e for e in entries if _tt_effective_now(e)]
     return {"config": cfg, "entries": entries, "academic_year": academic_year,
-            "class_name": student["class_name"], "section": student.get("section")}
+            "class_name": student["class_name"], "section": student.get("section"),
+            "today_changes": await _section_cover_changes(iid, student["class_name"], student.get("section"))}
+
+
+async def _section_cover_changes(iid, class_name, section):
+    """Phase 52: today's (institution tz) cover state for ONE section — substitute display name only, never the reason."""
+    today = (await _sub_now(iid)).date().isoformat()
+    rows = await db.substitutions.find(
+        {"institution_id": iid, "date": today, "class_name": class_name, "section": section,
+         "status": {"$in": ["open", "requested", "assigned"]}},
+        {"_id": 0, "absence_id": 1, "period_no": 1, "day": 1, "status": 1, "substitute_name": 1}).to_list(50)
+    live = {a["id"] for a in await db.absences.find(
+        {"institution_id": iid, "id": {"$in": [r["absence_id"] for r in rows]}, "status": "approved"}, {"_id": 0, "id": 1}).to_list(50)}
+    ay = await _active_year_name(iid)
+    items = [{"period_no": r["period_no"], "period_label": await _period_label(iid, ay, class_name, r["period_no"]),
+              "kind": "substitute" if r["status"] == "assigned" else "absent",
+              "substitute_name": r.get("substitute_name") if r["status"] == "assigned" else None}
+             for r in sorted(rows, key=lambda r: r["period_no"]) if r["absence_id"] in live]
+    return {"date": today, "day": _weekday_code(today), "items": items}
+
+
+@api.get("/parent/child/{student_id}/timetable")
+async def parent_child_timetable(student_id: str, user: dict = Depends(require_roles("parent"))):
+    iid = user["institution_id"]
+    if student_id not in (user.get("student_ids") or []):
+        raise HTTPException(status_code=403, detail="This student is not linked to your account")
+    st = await db.students.find_one({"id": student_id, "institution_id": iid}, {"_id": 0, "class_name": 1, "section": 1})
+    if not st or not st.get("class_name"):
+        return {"config": None, "entries": [], "academic_year": None, "today_changes": None}
+    ay = await _active_year_name(iid)
+    cls = await db.classes.find_one({"institution_id": iid, "name": st["class_name"]}, {"_id": 0, "academic_unit_id": 1}) or {}
+    cfg = await effective_tt_config(iid, ay, cls.get("academic_unit_id"))
+    entries = await db.timetable_entries.find(
+        {"institution_id": iid, "academic_year": ay, "class_name": st["class_name"], "section": st.get("section"),
+         "status": "active", **PUBLISHED_MATCH}, {"_id": 0, "id": 1, "day": 1, "period_no": 1, "subject": 1,
+                                                  "teacher_name": 1, "room": 1, "type": 1, "effective_from": 1, "effective_to": 1}).to_list(500)
+    entries = [e for e in entries if _tt_effective_now(e)]
+    return {"config": cfg, "entries": entries, "academic_year": ay, "class_name": st["class_name"], "section": st.get("section"),
+            "today_changes": await _section_cover_changes(iid, st["class_name"], st.get("section"))}
+
+
+# ---------------- Phase 54: portal branding for any signed-in school user + monthly attendance calendar ----------------
+
+@api.get("/me/branding")
+async def my_school_branding(user: dict = Depends(get_current_user)):
+    iid = user.get("institution_id")
+    inst = await db.institutions.find_one({"id": iid}, {"_id": 0, "name": 1, "portal_name": 1, "slug": 1, "code": 1, "domain": 1, "logo_path": 1,
+                                                        "logo_url": 1, "login_tagline": 1, "primary_color": 1}) if iid else None
+    if not inst:
+        raise HTTPException(status_code=404, detail="No school")
+    b = _login_branding(inst)
+    color = inst.get("primary_color") or (inst.get("logo_path") and _logo_accent(inst["logo_path"])) or None
+    return {"name": b["name"], "logo_url": b["logo_url"], "tagline": b["tagline"], "primary_color": color}
+
+
+_LOGO_ACCENT = {}
+
+
+def _logo_accent(path):
+    """Most saturated dominant colour of the logo (cached per object path); None if it can't be read."""
+    if path in _LOGO_ACCENT:
+        return _LOGO_ACCENT[path]
+    import colorsys
+    import io as _bio
+    from PIL import Image
+    color = None
+    try:
+        data, _ = _get_object(path)
+        im = Image.open(_bio.BytesIO(data)).convert("RGB").resize((64, 64))
+        best = 0
+        for count, (r, g, b_) in im.getcolors(64 * 64) or []:
+            h, l, sat = colorsys.rgb_to_hls(r / 255, g / 255, b_ / 255)
+            if 0.2 < l < 0.6 and sat > 0.35 and count * sat > best:
+                best, color = count * sat, "#%02x%02x%02x" % (r, g, b_)
+    except Exception:
+        color = None
+    _LOGO_ACCENT[path] = color
+    return color
+
+
+async def _attendance_calendar(iid, student, month):
+    import re as _re
+    if not _re.fullmatch(r"\d{4}-\d{2}", month or ""):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    sid = student["id"]
+    q = {"institution_id": iid, "class_name": student.get("class_name"), "section": student.get("section")}
+    yr = await db.academic_years.find_one({"institution_id": iid, "status": "active"}, {"_id": 0, "start_date": 1, "end_date": 1}) or {}
+    days, y_present, y_total = [], 0, 0
+    async for sh in db.attendance.find(q, {"_id": 0, "date": 1, "entries": 1}):
+        st = (sh.get("entries") or {}).get(sid)
+        d = sh.get("date") or ""
+        if st is None:
+            continue
+        st = str(st).lower()
+        st = {"p": "present", "a": "absent", "l": "late"}.get(st, st)
+        if (not yr.get("start_date") or d >= yr["start_date"]) and (not yr.get("end_date") or d <= yr["end_date"]):
+            y_total += 1
+            y_present += st == "present"  # same rule as /portal/me
+        if d.startswith(month):
+            days.append({"date": d, "status": st})
+    days.sort(key=lambda x: x["date"])
+    m_total = len(days)
+    m_present = sum(1 for x in days if x["status"] == "present")
+    cls = await db.classes.find_one({"institution_id": iid, "name": student.get("class_name")}, {"_id": 0, "academic_unit_id": 1}) or {}
+    cfg = await effective_tt_config(iid, await _active_year_name(iid), cls.get("academic_unit_id"))
+    return {"month": month, "days": days, "working_days": cfg.get("working_days") or [],
+            "month_pct": round(m_present / m_total * 100) if m_total else None, "month_present": m_present, "month_total": m_total,
+            "year_pct": round(y_present / y_total * 100) if y_total else None, "year_present": y_present, "year_total": y_total}
+
+
+@api.get("/portal/attendance-calendar")
+async def portal_attendance_calendar(month: str, user: dict = Depends(require_roles("student"))):
+    iid = user["institution_id"]
+    st = await db.students.find_one({"id": user.get("student_id"), "institution_id": iid}, {"_id": 0, "id": 1, "class_name": 1, "section": 1})
+    if not st:
+        raise HTTPException(status_code=404, detail="No student profile")
+    return await _attendance_calendar(iid, st, month)
+
+
+@api.get("/parent/child/{student_id}/attendance-calendar")
+async def parent_attendance_calendar(student_id: str, month: str, user: dict = Depends(require_roles("parent"))):
+    iid = user["institution_id"]
+    if student_id not in (user.get("student_ids") or []):
+        raise HTTPException(status_code=403, detail="This student is not linked to your account")
+    st = await db.students.find_one({"id": student_id, "institution_id": iid}, {"_id": 0, "id": 1, "class_name": 1, "section": 1})
+    if not st:
+        raise HTTPException(status_code=404, detail="Student not found")
+    return await _attendance_calendar(iid, st, month)
 
 
 # ================= Phase 28 — NOTICES MODULE (communication-connected) =================
@@ -4408,6 +4699,129 @@ async def public_institution_logo(domain: str = "", slug: str = ""):
         raise HTTPException(status_code=404, detail="No logo")
     return Response(content=data, media_type=inst.get("logo_type") or ctype,
                     headers={"Cache-Control": "public, max-age=600"})
+
+
+# ---------------- Phase 53: branded school login page (public: name, logo, tagline, background only) ----------------
+
+LOGIN_BG_MAX = 5 * 1024 * 1024
+LOGIN_DEFAULT_BG = ROOT_DIR / "static" / "login-default.jpg"
+
+
+class LoginPageIn(BaseModel):
+    tagline: str = PField(default="", max_length=80)
+
+
+def _login_bg_compress(data: bytes) -> bytes:
+    from PIL import Image, ImageOps
+    import io as _bio
+    try:
+        im = Image.open(_bio.BytesIO(data))
+        im = ImageOps.exif_transpose(im).convert("RGB")
+    except Exception:
+        raise HTTPException(status_code=400, detail="That file isn't a readable image")
+    if im.width > 1920:
+        im = im.resize((1920, round(im.height * 1920 / im.width)), Image.LANCZOS)
+    out = _bio.BytesIO()
+    im.save(out, "JPEG", quality=82, optimize=True, progressive=True)
+    return out.getvalue()
+
+
+def _login_branding(inst):
+    from urllib.parse import quote
+    slug = inst.get("slug") or (inst.get("code") or "").lower() or (inst.get("domain") or "")
+    logo_q = f"slug={quote(inst['slug'])}" if inst.get("slug") else f"domain={quote(inst.get('domain') or '')}"
+    logo = f"/api/public/institution-logo?{logo_q}" if inst.get("logo_path") else (inst.get("logo_url") or None)
+    bg = (f"/api/public/institutions/{quote(slug)}/login-background?v={inst.get('login_bg_version') or 1}"
+          if inst.get("login_bg_path") else "/api/public/login-default.jpg")
+    return {"name": inst.get("portal_name") or inst.get("name"), "logo_url": logo,
+            "tagline": inst.get("login_tagline") or "", "background_url": bg}
+
+
+async def _inst_by_code(code):
+    c = (code or "").strip()
+    if not c:
+        return None
+    return await db.institutions.find_one({"$or": [{"slug": c.lower()}, {"code": c.upper()}, {"domain": c.lower()}]},
+                                          {"_id": 0, "id": 1, "name": 1, "portal_name": 1, "slug": 1, "logo_path": 1, "logo_url": 1,
+                                           "login_tagline": 1, "login_bg_path": 1, "login_bg_version": 1, "login_bg_type": 1, "domain": 1, "code": 1})
+
+
+@api.get("/public/institutions/branding")
+async def public_institution_branding_lookup(domain: str = "", code: str = ""):
+    """Same minimal fields as /{code}/branding, resolved by ?domain= (login?domain=lpgs.com) or ?code=."""
+    inst = await _inst_by_code(code or domain)
+    if not inst:
+        raise HTTPException(status_code=404, detail="Not found")
+    return _login_branding(inst)
+
+
+@api.get("/public/institutions/{code}/branding")
+async def public_institution_branding(code: str):
+    inst = await _inst_by_code(code)
+    if not inst:
+        raise HTTPException(status_code=404, detail="Not found")
+    return _login_branding(inst)
+
+
+@api.get("/public/institutions/{code}/login-background")
+async def public_login_background(code: str):
+    inst = await _inst_by_code(code)
+    if not inst or not inst.get("login_bg_path"):
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        data, _ = _get_object(inst["login_bg_path"])
+    except Exception:
+        raise HTTPException(status_code=404, detail="Not found")
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@api.get("/public/login-default.jpg")
+async def public_login_default_bg():
+    return Response(content=LOGIN_DEFAULT_BG.read_bytes(), media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+@api.get("/institution/login-page")
+async def get_login_page(user: dict = Depends(require_roles("institution_admin"))):
+    inst = await db.institutions.find_one({"id": user["institution_id"]}, {"_id": 0}) or {}
+    return {**_login_branding(inst), "slug": inst.get("slug") or (inst.get("code") or "").lower() or inst.get("domain"), "has_background": bool(inst.get("login_bg_path"))}
+
+
+@api.put("/institution/login-page")
+async def update_login_page(body: LoginPageIn, user: dict = Depends(require_roles("institution_admin"))):
+    iid = user["institution_id"]
+    tagline = body.tagline.strip()
+    await db.institutions.update_one({"id": iid}, {"$set": {"login_tagline": tagline}})
+    await audit(user, "login_page_tagline", "institution_profile", iid, tagline or "(cleared)")
+    return await get_login_page(user)
+
+
+@api.post("/institution/login-page/background")
+async def upload_login_background(file: UploadFile = File(...), user: dict = Depends(require_roles("institution_admin"))):
+    iid = user["institution_id"]
+    if file.content_type not in PHOTO_TYPES:
+        raise HTTPException(status_code=400, detail="Please upload a JPG, PNG or WebP image")
+    data = await file.read(LOGIN_BG_MAX + 1)
+    if len(data) > LOGIN_BG_MAX:
+        raise HTTPException(status_code=400, detail="Background photo must be 5 MB or smaller")
+    jpg = _login_bg_compress(data)
+    path = f"lnmo/login-bg/{iid}/{uuid.uuid4()}.jpg"
+    try:
+        result = _put_object(path, jpg, "image/jpeg")
+    except Exception:
+        raise HTTPException(status_code=502, detail="Photo storage is unavailable right now — try again shortly")
+    await db.institutions.update_one({"id": iid}, {"$set": {"login_bg_path": result["path"], "login_bg_type": "image/jpeg"},
+                                                   "$inc": {"login_bg_version": 1}})
+    await audit(user, "login_page_background_upload", "institution_profile", iid, f"{len(data)}→{len(jpg)} bytes")
+    return await get_login_page(user)
+
+
+@api.delete("/institution/login-page/background")
+async def reset_login_background(user: dict = Depends(require_roles("institution_admin"))):
+    iid = user["institution_id"]
+    await db.institutions.update_one({"id": iid}, {"$unset": {"login_bg_path": "", "login_bg_type": ""}, "$inc": {"login_bg_version": 1}})
+    await audit(user, "login_page_background_reset", "institution_profile", iid, "default background")
+    return await get_login_page(user)
 
 
 # ================= Phase 15 — PROFILES: photos + signature/seal SECURE VAULT =================
@@ -5155,8 +5569,18 @@ async def publish_exam_results(exam_id: str, body: ExamPublishResults,
 
 @api.get("/portal/exams")
 async def portal_exams(user: dict = Depends(require_roles("student"))):
-    iid = user["institution_id"]
-    sid = user.get("student_id")
+    return await _student_exams(user["institution_id"], user.get("student_id"))
+
+
+@api.get("/parent/child/{student_id}/exams")
+async def parent_child_exams(student_id: str, user: dict = Depends(require_roles("parent"))):
+    if student_id not in (user.get("student_ids") or []):
+        raise HTTPException(status_code=403, detail="This student is not linked to your account")
+    return await _student_exams(user["institution_id"], student_id)
+
+
+async def _student_exams(iid, sid):
+    """Published exam papers for the student's class/section (Phase 54: shared by student + parent portals)."""
     student = await db.students.find_one({"id": sid, "institution_id": iid}, {"_id": 0}) if sid else None
     if not student or not student.get("class_name"):
         return {"exams": []}
@@ -11101,7 +11525,8 @@ class LateFeeIn(_BM):
 
 class FeeStructureIn(_BM):
     name: str = _F(min_length=1, max_length=120)
-    academic_year: str = _F(min_length=4, max_length=20)
+    academic_year_id: Optional[str] = _F(default=None, max_length=60)
+    academic_year: Optional[str] = _F(default=None, max_length=20)  # legacy text; resolved to an id when unambiguous
     academic_unit_id: Optional[str] = None
     class_name: Optional[str] = None
     heads: _List[FeeHeadIn] = _F(min_length=1, max_length=40)
@@ -11246,7 +11671,7 @@ async def _validate_structure(iid, body: FeeStructureIn):
 
 
 async def _get_structure(iid, sid, user=None):
-    st = await db.fee_structures.find_one({"id": sid, "institution_id": iid}, {"_id": 0})
+    st = await db.fee_structures.find_one({"id": sid, "institution_id": iid, "deleted": {"$ne": True}}, {"_id": 0})
     if not st:
         raise HTTPException(status_code=404, detail="Fee structure not found")
     if user is not None and not _struct_in_scope(st, await _fee_scope(user)):
@@ -11260,19 +11685,54 @@ async def list_fee_structures(user: dict = Depends(require_admin_or_principal)):
     scope = await _fee_scope(user)
     units = {u["id"]: u.get("name") async for u in db.academic_units.find({"institution_id": iid}, {"_id": 0, "id": 1, "name": 1})}
     rows = []
-    async for st in db.fee_structures.find({"institution_id": iid}, {"_id": 0}).sort("created_at", -1):
+    legacy = await _legacy_year_ids(iid)
+    async for st in db.fee_structures.find({"institution_id": iid, "deleted": {"$ne": True}}, {"_id": 0}).sort("created_at", -1):
         if not _struct_in_scope(st, scope):
             continue
         st["unit_name"] = units.get(st.get("academic_unit_id"))
+        st["archived"] = st.get("status") == "archived"
+        if not st.get("academic_year_id"):
+            st["academic_year_id"] = legacy.get(st.get("academic_year"))
+        st["usage"] = await _structure_usage(st["id"])
         st["account_count"] = await db.fee_accounts.count_documents({"structure_id": st["id"], "status": "active"})
         st["invoice_count"] = await db.fee_invoices.count_documents({"structure_id": st["id"]})
         rows.append(st)
     return {"structures": rows}
 
 
+CLOSED_YEAR_STATES = ("closed", "archived")
+
+
+async def _resolve_structure_year(iid, body, keep_year_id=None):
+    """Phase 53: the structure's year must be one of this institution's academic years (stored by id)."""
+    if body.academic_year_id:
+        y = await db.academic_years.find_one({"id": body.academic_year_id, "institution_id": iid}, {"_id": 0, "id": 1, "name": 1, "status": 1})
+        if not y:
+            raise HTTPException(status_code=404, detail="Academic year not found in this institution")
+    elif body.academic_year:
+        ys = await db.academic_years.find({"institution_id": iid, "name": body.academic_year.strip()}, {"_id": 0, "id": 1, "name": 1, "status": 1}).to_list(3)
+        if len(ys) != 1:
+            raise HTTPException(status_code=400, detail="Pick one of your academic years")
+        y = ys[0]
+    else:
+        raise HTTPException(status_code=400, detail="Pick an academic year")
+    if y.get("status") in CLOSED_YEAR_STATES and y["id"] != keep_year_id:
+        raise HTTPException(status_code=400, detail=f"Academic year {y['name']} is {y['status']} — pick a current or upcoming year")
+    body.academic_year_id, body.academic_year = y["id"], y["name"]
+
+
+async def _legacy_year_ids(iid):
+    """Read-time mapping of legacy free-text years → id, only when the name matches exactly one year (no writes)."""
+    by_name = {}
+    async for y in db.academic_years.find({"institution_id": iid}, {"_id": 0, "id": 1, "name": 1}):
+        by_name.setdefault(y["name"], []).append(y["id"])
+    return {n: ids[0] for n, ids in by_name.items() if len(ids) == 1}
+
+
 @api.post("/fees/structures")
 async def create_fee_structure(body: FeeStructureIn, user: dict = Depends(require_fee_admin)):
     iid = user["institution_id"]
+    await _resolve_structure_year(iid, body)
     heads = await _validate_structure(iid, body)
     doc = {**body.model_dump(), "heads": heads, "id": str(uuid.uuid4()), "institution_id": iid,
            "created_by": user.get("email"), "created_at": now_iso()}
@@ -11285,9 +11745,11 @@ async def create_fee_structure(body: FeeStructureIn, user: dict = Depends(requir
 @api.put("/fees/structures/{sid}")
 async def update_fee_structure(sid: str, body: FeeStructureIn, user: dict = Depends(require_fee_admin)):
     iid = user["institution_id"]
-    await _get_structure(iid, sid)
+    cur = await _get_structure(iid, sid)
     if await db.fee_invoices.count_documents({"structure_id": sid}):
         raise HTTPException(status_code=409, detail="Invoices were already generated from this structure — clone it to make changes")
+    keep = cur.get("academic_year_id") or (await _legacy_year_ids(iid)).get(cur.get("academic_year"))
+    await _resolve_structure_year(iid, body, keep_year_id=keep)
     heads = await _validate_structure(iid, body)
     await db.fee_structures.update_one({"id": sid}, {"$set": {**body.model_dump(), "heads": heads, "updated_at": now_iso()}})
     await audit(user, "fee_structure_update", "fee_structures", sid, body.name, iid)
@@ -11298,6 +11760,8 @@ async def update_fee_structure(sid: str, body: FeeStructureIn, user: dict = Depe
 async def clone_fee_structure(sid: str, user: dict = Depends(require_fee_admin)):
     iid = user["institution_id"]
     st = await _get_structure(iid, sid)
+    for k in ("status", "archived_at", "archived_by", "archived_by_name", "unarchived_at", "updated_at"):
+        st.pop(k, None)
     doc = {**st, "id": str(uuid.uuid4()), "name": f"{st['name']} (copy)", "cloned_from": sid,
            "heads": [{**h, "id": str(uuid.uuid4())} for h in st["heads"]],
            "created_by": user.get("email"), "created_at": now_iso()}
@@ -11306,11 +11770,76 @@ async def clone_fee_structure(sid: str, user: dict = Depends(require_fee_admin))
     return doc
 
 
+async def _structure_usage(sid):
+    acc_ids = await db.fee_accounts.distinct("id", {"structure_id": sid})
+    inv_ids = await db.fee_invoices.distinct("id", {"structure_id": sid})
+    students = await db.fee_accounts.distinct("student_id", {"structure_id": sid})
+    payments = await db.fee_payments.count_documents(
+        {"$or": [{"account_id": {"$in": acc_ids}}, {"invoice_id": {"$in": inv_ids}}, {"structure_id": sid}]})
+    return {"students": len(students), "accounts": len(acc_ids), "invoices": len(inv_ids), "payments": payments,
+            "used": bool(acc_ids or inv_ids or payments)}
+
+
+def _usage_msg(u):
+    return f"Used by {u['students']} student(s) / {u['invoices']} invoice(s) — archive instead"
+
+
+def _require_not_archived(st, action):
+    if st.get("status") == "archived":
+        raise HTTPException(status_code=409, detail=f"“{st['name']}” is archived — unarchive it to {action}")
+
+
+@api.delete("/fees/structures/{sid}")
+async def delete_fee_structure(sid: str, user: dict = Depends(require_roles("institution_admin"))):
+    """Soft delete — only when nothing references it. Mark first, re-check, roll back on a race."""
+    iid = user["institution_id"]
+    st = await _get_structure(iid, sid)
+    u = await _structure_usage(sid)
+    if u["used"]:
+        raise HTTPException(status_code=409, detail=_usage_msg(u))
+    r = await db.fee_structures.update_one({"id": sid, "institution_id": iid, "deleted": {"$ne": True}},
+                                           {"$set": {"deleted": True, "deleted_by": user["id"], "deleted_by_name": user.get("name"),
+                                                     "deleted_at": now_iso()}})
+    if not r.modified_count:
+        raise HTTPException(status_code=404, detail="Fee structure not found")
+    u = await _structure_usage(sid)
+    if u["used"]:
+        await db.fee_structures.update_one({"id": sid}, {"$set": {"deleted": False}, "$unset": {"deleted_by": "", "deleted_by_name": "", "deleted_at": ""}})
+        raise HTTPException(status_code=409, detail=_usage_msg(u))
+    await audit(user, "fee_structure_delete", "fee_structures", sid, st["name"], iid)
+    return {"ok": True}
+
+
+@api.post("/fees/structures/{sid}/archive")
+async def archive_fee_structure(sid: str, user: dict = Depends(require_roles("institution_admin"))):
+    iid = user["institution_id"]
+    st = await _get_structure(iid, sid)
+    if st.get("status") == "archived":
+        raise HTTPException(status_code=400, detail="Already archived")
+    await db.fee_structures.update_one({"id": sid}, {"$set": {"status": "archived", "archived_at": now_iso(), "archived_by": user["id"],
+                                                              "archived_by_name": user.get("name")}})
+    await audit(user, "fee_structure_archive", "fee_structures", sid, st["name"], iid)
+    return await _get_structure(iid, sid)
+
+
+@api.post("/fees/structures/{sid}/unarchive")
+async def unarchive_fee_structure(sid: str, user: dict = Depends(require_roles("institution_admin"))):
+    iid = user["institution_id"]
+    st = await _get_structure(iid, sid)
+    if st.get("status") != "archived":
+        raise HTTPException(status_code=400, detail="This structure isn't archived")
+    await db.fee_structures.update_one({"id": sid}, {"$set": {"status": "active", "unarchived_at": now_iso()},
+                                                      "$unset": {"archived_at": "", "archived_by": "", "archived_by_name": ""}})
+    await audit(user, "fee_structure_unarchive", "fee_structures", sid, st["name"], iid)
+    return await _get_structure(iid, sid)
+
+
 @api.post("/fees/structures/{sid}/apply")
 async def apply_fee_structure(sid: str, user: dict = Depends(require_fee_admin)):
     """Create a fee account for every enrolled student in the structure's unit/class (idempotent)."""
     iid = user["institution_id"]
     st = await _get_structure(iid, sid)
+    _require_not_archived(st, "apply it to students")
     if not st.get("active"):
         raise HTTPException(status_code=400, detail="Activate the structure before applying it")
     names = await _struct_class_names(iid, st)
@@ -11344,6 +11873,7 @@ async def generate_fee_invoices(sid: str, body: FeeGenerateIn, user: dict = Depe
     """One invoice per account per period for heads of the chosen frequency. Idempotent per period."""
     iid = user["institution_id"]
     st = await _get_structure(iid, sid)
+    _require_not_archived(st, "generate new invoices")
     heads = [h for h in st["heads"] if h["frequency"] == body.frequency]
     if not heads:
         raise HTTPException(status_code=400, detail=f"This structure has no {body.frequency.replace('_', '-')} fee heads")

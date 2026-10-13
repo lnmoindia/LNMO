@@ -59,6 +59,8 @@ def ctx():
         A = platform.post("/api/res/institutions", json={"name": "Fee School", "slug": "p48",
                           "admin_email": "a@p48.test", "admin_password": "Admin@123"}).json()["id"]
         mon.institutions.update_one({"id": A}, {"$set": {"code": "TFS"}})
+        for yn, ys in (("2026-27", "active"), ("2027-28", "upcoming")):  # Phase 53: structures need a real year
+            mon.academic_years.insert_one({"id": str(uuid.uuid4()), "institution_id": A, "name": yn, "status": ys})
         admin = login("a@p48.test", "Admin@123")
         mon.academic_units.insert_many([{"id": "uHS", "institution_id": A, "name": "HS"}, {"id": "uLP", "institution_id": A, "name": "LP"}])
         for g, u in [(5, "uLP"), (8, "uHS"), (9, "uHS")]:

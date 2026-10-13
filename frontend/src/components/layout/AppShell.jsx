@@ -12,6 +12,8 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 
+import { BrandMark, brandVars } from "../../pages/portal/useSchoolBrand";
+
 const SidebarNav = ({ nav, onNavigate, badges = {} }) => {
   const loc = useLocation();
   const full = loc.pathname + loc.search;
@@ -51,7 +53,7 @@ const SidebarNav = ({ nav, onNavigate, badges = {} }) => {
   );
 };
 
-export default function AppShell({ nav, consoleLabel }) {
+export default function AppShell({ nav, consoleLabel, brand }) {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const { openReport } = useReportIssue();
@@ -93,11 +95,23 @@ export default function AppShell({ nav, consoleLabel }) {
   const sidebar = (
     <div className="flex h-full w-64 flex-col bg-slate-950 border-r border-slate-800">
       <div className="flex items-center gap-3 px-5 h-16 border-b border-slate-800/70 shrink-0">
-        <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center font-heading font-bold text-white text-sm">L</div>
-        <div>
-          <p className="font-heading font-bold text-white leading-none tracking-tight">LNMO</p>
-          <p className="text-[10px] uppercase tracking-wider text-slate-500 mt-1">{consoleLabel}</p>
-        </div>
+        {brand?.name ? (
+          <div className="flex items-center gap-3 min-w-0" style={brandVars(brand.color)} data-testid="sidebar-school-brand">
+            <BrandMark brand={brand} size="h-9 w-9" testid="sidebar-school-logo" />
+            <div className="min-w-0">
+              <p className="font-heading font-bold text-white leading-tight tracking-tight text-sm line-clamp-2" data-testid="sidebar-school-name">{brand.name}</p>
+              <p className="text-[10px] uppercase tracking-wider text-slate-500 mt-0.5">{consoleLabel}</p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center font-heading font-bold text-white text-sm">L</div>
+            <div>
+              <p className="font-heading font-bold text-white leading-none tracking-tight">LNMO</p>
+              <p className="text-[10px] uppercase tracking-wider text-slate-500 mt-1">{consoleLabel}</p>
+            </div>
+          </>
+        )}
       </div>
       <SidebarNav nav={nav} onNavigate={() => setMobileOpen(false)} badges={badges} />
       {user?.is_principal && (
@@ -105,7 +119,8 @@ export default function AppShell({ nav, consoleLabel }) {
           <ScopeChip user={user} variant="dark" />
         </div>
       )}
-      {user?.institution_name && (
+      {brand?.name && <p className="px-5 py-2.5 border-t border-slate-800/70 text-[10px] text-slate-500 shrink-0" data-testid="sidebar-powered-by">Powered by LNMO</p>}
+      {user?.institution_name && !brand?.name && (
         <div className="px-5 py-3 border-t border-slate-800/70 shrink-0">
           <p className="text-[10px] uppercase tracking-wider text-slate-500">Institution</p>
           <p className="text-sm text-slate-300 truncate" data-testid="sidebar-institution-name">{user.institution_name}</p>

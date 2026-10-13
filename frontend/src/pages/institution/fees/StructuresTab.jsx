@@ -8,10 +8,12 @@ import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
 import { Switch } from "../../../components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../../components/ui/dialog";
+import { StructureMenu } from "./StructureMenu";
+import { YearSelect } from "./YearSelect";
 
 const sel = "h-9 rounded-md border border-slate-200 dark:border-slate-700 bg-transparent px-2 text-sm";
 const blankHead = () => ({ title: "", amount: "", frequency: "annual", optional: false });
-const blank = { name: "", academic_year: "", target: "unit", academic_unit_id: "", class_name: "", heads: [blankHead()],
+const blank = { name: "", academic_year_id: "", target: "unit", academic_unit_id: "", class_name: "", heads: [blankHead()],
   late_fee: { enabled: false, type: "flat", value: 0, grace_days: 0 }, active: true };
 
 function HeadRow({ h, i, set, remove }) {
@@ -39,7 +41,7 @@ function StructureDialog({ open, initial, onClose, onSaved, units, classes }) {
   const setLate = (patch) => setF((s) => ({ ...s, late_fee: { ...s.late_fee, ...patch } }));
   const save = async () => {
     setBusy(true);
-    const body = { name: f.name, academic_year: f.academic_year, active: f.active,
+    const body = { name: f.name, academic_year_id: f.academic_year_id, active: f.active,
       academic_unit_id: f.target === "unit" ? f.academic_unit_id || null : null, class_name: f.target === "class" ? f.class_name || null : null,
       heads: f.heads.map((h) => ({ ...(h.id ? { id: h.id } : {}), title: h.title, amount: Number(h.amount || 0), frequency: h.frequency, optional: h.optional })),
       late_fee: { ...f.late_fee, value: Number(f.late_fee.value || 0), grace_days: Number(f.late_fee.grace_days || 0) } };
@@ -55,7 +57,9 @@ function StructureDialog({ open, initial, onClose, onSaved, units, classes }) {
           <DialogDescription>Applies to every enrolled student of the chosen academic unit or class.</DialogDescription></DialogHeader>
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5"><Label>Name</Label><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="HS Fee Structure 2026-27" data-testid="fee-structure-name" /></div>
-          <div className="space-y-1.5"><Label>Academic year</Label><Input value={f.academic_year} onChange={(e) => setF({ ...f, academic_year: e.target.value })} placeholder="2026-27" data-testid="fee-structure-year" /></div>
+          <div className="space-y-1.5"><Label>Academic year</Label>
+            <YearSelect value={f.academic_year_id} keepId={initial?.academic_year_id} onChange={(v) => setF((s) => ({ ...s, academic_year_id: v }))}
+              setDefault={initial ? null : (v) => setF((s) => ({ ...s, academic_year_id: v }))} /></div>
           <div className="space-y-1.5"><Label>Applies to</Label>
             <select className={`${sel} w-full`} value={f.target} onChange={(e) => setF({ ...f, target: e.target.value })} data-testid="fee-structure-target">
               <option value="unit">An academic unit</option><option value="class">A specific class</option></select></div>
@@ -83,7 +87,7 @@ function StructureDialog({ open, initial, onClose, onSaved, units, classes }) {
         </div>
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button disabled={busy || !f.name || !f.academic_year} onClick={save} className="bg-indigo-700 hover:bg-indigo-800 text-white" data-testid="fee-structure-save">{busy ? "Saving…" : "Save structure"}</Button>
+          <Button disabled={busy || !f.name || !f.academic_year_id} onClick={save} className="bg-indigo-700 hover:bg-indigo-800 text-white" data-testid="fee-structure-save">{busy ? "Saving…" : "Save structure"}</Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -132,12 +136,12 @@ function GenerateDialog({ st, onClose, onDone }) {
   );
 }
 
-function StructureCard({ st, readOnly, onEdit, onClone, onApply, onGenerate }) {
+function StructureCard({ st, readOnly, onEdit, onClone, onApply, onGenerate, onChanged }) {
   return (
-    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-3" data-testid={`fee-structure-${st.id}`}>
+    <div className={`rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-3 ${st.archived ? "opacity-75" : ""}`} data-testid={`fee-structure-${st.id}`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="font-semibold text-slate-900 dark:text-slate-100">{st.name}</p>
+          <p className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">{st.name}{st.archived && <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-0.5" data-testid={`fee-structure-archived-badge-${st.id}`}>Archived</span>}</p>
           <p className="text-xs text-slate-500">{st.academic_year} · {st.class_name || st.unit_name || "Unit"} · {st.account_count} accounts · {st.invoice_count} invoices
             {st.late_fee?.enabled ? ` · late fee ${st.late_fee.type === "flat" ? inr(st.late_fee.value) : `${st.late_fee.value}%`} after ${st.late_fee.grace_days} days` : ""}</p>
         </div>
@@ -145,8 +149,9 @@ function StructureCard({ st, readOnly, onEdit, onClone, onApply, onGenerate }) {
           <div className="flex flex-wrap gap-1.5">
             <Button size="sm" variant="outline" disabled={st.invoice_count > 0} title={st.invoice_count ? "Invoices exist — clone to change" : ""} onClick={onEdit} data-testid={`fee-structure-edit-${st.id}`}><Pencil size={13} className="mr-1" /> Edit</Button>
             <Button size="sm" variant="outline" onClick={onClone} data-testid={`fee-structure-clone-${st.id}`}><Copy size={13} className="mr-1" /> Clone</Button>
-            <Button size="sm" variant="outline" onClick={onApply} data-testid={`fee-structure-apply-${st.id}`}><Users size={13} className="mr-1" /> Apply to students</Button>
-            <Button size="sm" onClick={onGenerate} disabled={!st.account_count} className="bg-indigo-700 hover:bg-indigo-800 text-white" data-testid={`fee-structure-generate-${st.id}`}><FileStack size={13} className="mr-1" /> Generate invoices</Button>
+            {!st.archived && <Button size="sm" variant="outline" onClick={onApply} data-testid={`fee-structure-apply-${st.id}`}><Users size={13} className="mr-1" /> Apply to students</Button>}
+            {!st.archived && <Button size="sm" onClick={onGenerate} disabled={!st.account_count} className="bg-indigo-700 hover:bg-indigo-800 text-white" data-testid={`fee-structure-generate-${st.id}`}><FileStack size={13} className="mr-1" /> Generate invoices</Button>}
+            <StructureMenu st={st} onChanged={onChanged} />
           </div>
         )}
       </div>
@@ -166,6 +171,7 @@ export default function StructuresTab({ readOnly }) {
   const [classes, setClasses] = useState([]);
   const [editing, setEditing] = useState(undefined);
   const [gen, setGen] = useState(null);
+  const [showArchived, setShowArchived] = useState(false);
   const load = useCallback(() => api.get("/fees/structures").then((r) => setRows(r.data.structures)).catch((e) => { toast.error(errText(e)); setRows([]); }), []);
   useEffect(() => {
     load();
@@ -175,10 +181,15 @@ export default function StructuresTab({ readOnly }) {
   const act = async (fn, msg) => { try { const r = await fn(); toast.success(msg(r.data)); load(); } catch (e) { toast.error(errText(e)); } };
   return (
     <div className="space-y-4 pt-2" data-testid="fees-structures-tab">
-      {!readOnly && <Button onClick={() => setEditing(null)} className="bg-indigo-700 hover:bg-indigo-800 text-white" data-testid="fee-structure-new-btn"><Plus size={15} className="mr-1.5" /> New structure</Button>}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {!readOnly ? <Button onClick={() => setEditing(null)} className="bg-indigo-700 hover:bg-indigo-800 text-white" data-testid="fee-structure-new-btn"><Plus size={15} className="mr-1.5" /> New structure</Button> : <span />}
+        <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+          <Switch checked={showArchived} onCheckedChange={setShowArchived} data-testid="fee-structures-show-archived" /> Show archived ({rows?.filter((r) => r.archived).length || 0})
+        </label>
+      </div>
       {rows?.length === 0 && <p className="text-sm text-slate-400 py-8 text-center">No fee structures yet.</p>}
-      {rows?.map((st) => (
-        <StructureCard key={st.id} st={st} readOnly={readOnly} onEdit={() => setEditing(st)} onGenerate={() => setGen(st)}
+      {rows?.filter((st) => showArchived || !st.archived).map((st) => (
+        <StructureCard key={st.id} st={st} readOnly={readOnly} onEdit={() => setEditing(st)} onGenerate={() => setGen(st)} onChanged={load}
           onClone={() => act(() => api.post(`/fees/structures/${st.id}/clone`), () => "Cloned — edit the copy")}
           onApply={() => act(() => api.post(`/fees/structures/${st.id}/apply`), (d) => `${d.created} accounts created${d.skipped.length ? ` · ${d.skipped.length} skipped` : ""}`)} />
       ))}
