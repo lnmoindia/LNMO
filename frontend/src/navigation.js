@@ -62,7 +62,10 @@ export const institutionNav = [
   },
   {
     group: "Finance",
-    items: [{ label: "Fees", path: "/app/fees", icon: Wallet }],
+    items: [
+      { label: "Fees", path: "/app/fees", icon: Wallet },
+      { label: "Fee Defaulters", path: "/app/fees?tab=defaulters", icon: Wallet },
+    ],
   },
   {
     group: "Operations",
@@ -106,6 +109,7 @@ export const teacherNav = [
       { label: "Notices", path: "/teacher/notices", icon: Megaphone },
       { label: "AI Tutor", path: "/teacher/ai-tutor", icon: Sparkles },
       { label: "Attendance", path: "/teacher/attendance", icon: CalendarCheck },
+      { label: "Fee Defaulters", path: "/teacher/fee-defaulters", icon: Wallet },
       { label: "My Profile", path: "/teacher/profile", icon: UserCog },
     ],
   },
@@ -129,6 +133,7 @@ export const buildPrincipalNav = () => [
       { label: "Subjects", path: "/app/subjects", icon: BookOpen },
       { label: "Promotion", path: "/app/promotion", icon: ArrowRightLeft },
       { label: "Fees", path: "/app/fees", icon: Wallet },
+      { label: "Fee Defaulters", path: "/app/fees?tab=defaulters", icon: Wallet },
       { label: "Timetable", path: "/app/timetable", icon: Table2 },
       { label: "Substitutions", path: "/app/substitutions", icon: UserX },
       { label: "Attendance", path: "/app/attendance", icon: CalendarCheck },

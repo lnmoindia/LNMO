@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowRightLeft, GraduationCap, UserMinus, RotateCcw, Play, Eye, CheckCircle2,
-  Clock, MessageSquarePlus, Loader2, ChevronRight,
+  Clock, MessageSquarePlus, Loader2, ChevronRight, AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import api, { errText } from "../../lib/api";
+import { inr } from "../../lib/fees";
 import { useAuth } from "../../context/AuthContext";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -61,9 +62,11 @@ const SummaryBar = ({ summary }) => (
   </div>
 );
 
-const PromoRow = ({ d, editable, setDecision, setSectionOverride, onRecommend }) => (
+const PromoRow = ({ d, due, editable, setDecision, setSectionOverride, onRecommend }) => (
   <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/40" data-testid={`promo-row-${d.student_id}`}>
-    <td className="px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100">{d.student_name}<div className="text-xs text-slate-400">{d.admission_no || ""}</div></td>
+    <td className="px-4 py-2.5 font-medium text-slate-800 dark:text-slate-100">{d.student_name}
+      {due > 0 && <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:border-amber-500/30" title="Outstanding fee balance — promotion is still allowed; dues carry forward as arrears" data-testid={`promo-dues-badge-${d.student_id}`}><AlertTriangle size={10} /> Dues pending {inr(due)}</span>}
+      <div className="text-xs text-slate-400">{d.admission_no || ""}</div></td>
     <td className="px-4 py-2.5 text-slate-600 dark:text-slate-300">{d.from_class} · {d.from_section}</td>
     <td className="px-4 py-2.5 text-slate-600 dark:text-slate-300">
       {d.to_class ? <>{d.to_class} · {editable && (d.decision === "promote" || d.decision === "detain") ? (
@@ -89,7 +92,7 @@ const PromoRow = ({ d, editable, setDecision, setSectionOverride, onRecommend })
   </tr>
 );
 
-const SectionGroup = ({ cls, section, rows, editable, setDecision, setSectionOverride, onRecommend, onBulk }) => {
+const SectionGroup = ({ cls, section, rows, dues, editable, setDecision, setSectionOverride, onRecommend, onBulk }) => {
   const [note, setNote] = useState("");
   const [override, setOverride] = useState(false);
   const key = `${cls}-${section}`;
@@ -123,7 +126,7 @@ const SectionGroup = ({ cls, section, rows, editable, setDecision, setSectionOve
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {rows.map((d) => (
-              <PromoRow key={d.id} d={d} editable={editable} setDecision={setDecision} setSectionOverride={setSectionOverride} onRecommend={onRecommend} />
+              <PromoRow key={d.id} d={d} due={dues?.[d.student_id] || 0} editable={editable} setDecision={setDecision} setSectionOverride={setSectionOverride} onRecommend={onRecommend} />
             ))}
           </tbody>
         </table>
@@ -147,6 +150,9 @@ export default function PromotionPage() {
   const [confirmExec, setConfirmExec] = useState(false);
   const [execText, setExecText] = useState("");
   const [confirmRollback, setConfirmRollback] = useState(false);
+  const [dues, setDues] = useState({});
+  const [duesSummary, setDuesSummary] = useState(null);
+  const applyDues = (data) => { setDues(data.dues || {}); setDuesSummary(data.dues_summary || null); };
 
   useEffect(() => {
     api.get("/res/academic_years", { params: { limit: 100 } })
@@ -161,7 +167,7 @@ export default function PromotionPage() {
   const loadRun = useCallback(async (id) => {
     try {
       const { data } = await api.get(`/promotion/${id}`);
-      setRun(data.run); setDecisions(data.decisions); setSummary(data.summary);
+      setRun(data.run); setDecisions(data.decisions); setSummary(data.summary); applyDues(data);
       setFromYear(data.run.from_year); setToYear(data.run.to_year);
     } catch (e) { toast.error(errText(e)); }
   }, []);
@@ -171,7 +177,7 @@ export default function PromotionPage() {
     setBusy(true);
     try {
       const { data } = await api.post("/promotion/preview", { from_year: fromYear, to_year: toYear });
-      setRun(data.run); setDecisions(data.decisions); setSummary(data.summary);
+      setRun(data.run); setDecisions(data.decisions); setSummary(data.summary); applyDues(data);
       toast.success(`Preview ready — ${data.decisions.length} students${data.structure.academic_year_created ? ` · created ${toYear}` : ""}`);
     } catch (e) { toast.error(errText(e)); } finally { setBusy(false); }
   };
@@ -220,7 +226,8 @@ export default function PromotionPage() {
     setBusy(true);
     try {
       const { data } = await api.post(`/promotion/${run.id}/execute`);
-      toast.success(`Executed — promoted ${data.summary.promote}, detained ${data.summary.detain}, graduated ${data.summary.graduate}, transferred ${data.summary.transfer_out}`);
+      const cf = data.dues_carry_forward;
+      toast.success(`Executed — promoted ${data.summary.promote}, detained ${data.summary.detain}, graduated ${data.summary.graduate}, transferred ${data.summary.transfer_out}${cf?.created ? ` · dues of ${cf.created} students carried forward (${inr(cf.amount)})` : ""}`);
       setConfirmExec(false); setExecText(""); loadRun(run.id);
     } catch (e) { toast.error(errText(e)); } finally { setBusy(false); }
   };
@@ -272,6 +279,15 @@ export default function PromotionPage() {
 
       {run && (
         <>
+          {duesSummary && duesSummary.students > 0 && (
+            <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 dark:bg-amber-500/10 dark:border-amber-500/30 px-4 py-3" data-testid="promo-dues-summary">
+              <AlertTriangle size={18} className="text-amber-600 mt-0.5 shrink-0" />
+              <div className="text-sm">
+                <p className="font-semibold text-amber-900 dark:text-amber-200"><span data-testid="promo-dues-count">{duesSummary.students}</span> student{duesSummary.students === 1 ? "" : "s"} with pending dues, <span data-testid="promo-dues-total">{inr(duesSummary.total)}</span></p>
+                <p className="text-amber-800/80 dark:text-amber-300/80 text-xs mt-0.5">Warning only — promotion is not blocked. On execute, unpaid balances carry forward to the new year as a "Previous dues" arrears invoice (linked to the original invoices).</p>
+              </div>
+            </div>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <SummaryBar summary={summary} />
             <div className="flex gap-2">
@@ -301,7 +317,7 @@ export default function PromotionPage() {
                     const [cls, section] = g.split("||");
                     const rows = dvRows.filter((d) => `${d.from_class}||${d.from_section}` === g);
                     return (
-                      <SectionGroup key={g} cls={cls} section={section} rows={rows} editable={editable}
+                      <SectionGroup key={g} cls={cls} section={section} rows={rows} dues={dues} editable={editable}
                         setDecision={setDecision} setSectionOverride={setSectionOverride}
                         onRecommend={openRecommend} onBulk={bulkRecommend} />
                     );

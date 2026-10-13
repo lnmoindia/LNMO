@@ -10625,7 +10625,8 @@ async def promotion_preview(payload: dict = Body(...), user: dict = Depends(requ
     await audit(user, "promotion_preview", "promotion_runs", run_id, f"{from_year} → {to_year}", iid)
     for d in decisions:
         d.pop("_id", None)
-    return {"run": run, "decisions": decisions, "summary": _promo_counts(decisions), "structure": cloned}
+    return {"run": run, "decisions": decisions, "summary": _promo_counts(decisions), "structure": cloned,
+            **await _promo_dues(iid, decisions)}
 
 
 @api.get("/promotion/runs")
@@ -10644,7 +10645,7 @@ async def promotion_get_run(run_id: str, user: dict = Depends(require_admin_or_p
     if scope and not scope["whole_school"]:
         allowed = set(scope["class_names"] or [])
         decs = [d for d in decs if d.get("from_class") in allowed]
-    return {"run": run, "decisions": decs, "summary": _promo_counts(decs)}
+    return {"run": run, "decisions": decs, "summary": _promo_counts(decs), **await _promo_dues(iid, decs)}
 
 
 async def _promo_decision_or_404(iid, did):
@@ -10814,7 +10815,9 @@ async def promotion_execute(run_id: str, user: dict = Depends(require_roles("ins
     await db.promotion_runs.update_one({"id": run_id}, {"$set": {
         "status": "executed", "executed_by": user.get("name") or user.get("email"), "executed_at": now_iso()}})
     await audit(user, "promotion_execute", "promotion_runs", run_id, f"{from_year} → {to_year}", iid)
-    return {"ok": True, "status": "executed", "summary": counts}
+    carry = await _carry_forward_dues(iid, from_year, to_year, [d["student_id"] for d in decs
+                                      if d.get("decision", "promote") in ("promote", "detain")], user, run_id)
+    return {"ok": True, "status": "executed", "summary": counts, "dues_carry_forward": carry}
 
 
 @api.post("/promotion/{run_id}/rollback")
@@ -11184,6 +11187,8 @@ def _invoice_view(inv, late, today=None):
         status = "partial"
     else:
         status = "pending"
+    if inv.get("carried_forward_to"):  # Phase 50: balance moved to a next-year arrears invoice
+        bal, status = 0.0, "carried_forward"
     out = {k: v for k, v in inv.items() if k != "_id"}
     out.update({"fine_amount": fine, "fine_projected": projected, "amount_due": due, "paid_amount": paid,
                 "balance": max(bal, 0.0), "status": status})
@@ -11384,6 +11389,13 @@ async def _account_rows(iid, accounts):
     by_acc = {}
     async for inv in db.fee_invoices.find({"account_id": {"$in": ids}}, {"_id": 0}):
         by_acc.setdefault(inv["account_id"], []).append(_invoice_view(inv, late.get(inv["structure_id"])))
+    keymap = {(a["student_id"], a.get("academic_year")): a["id"] for a in accounts if a.get("status") == "active"}
+    if keymap:  # Phase 50: arrears invoices attach to the student's account for that year
+        async for inv in db.fee_invoices.find({"institution_id": iid, "is_arrears": True,
+                                               "student_id": {"$in": list({k[0] for k in keymap})}}, {"_id": 0}):
+            aid = keymap.get((inv["student_id"], inv.get("academic_year")))
+            if aid:
+                by_acc.setdefault(aid, []).append(_invoice_view(inv, None))
     return [{**a, "summary": _summarize(by_acc.get(a["id"], []))} for a in accounts]
 
 
@@ -11421,8 +11433,12 @@ async def fee_account_ledger(aid: str, user: dict = Depends(require_admin_or_pri
     iid = user["institution_id"]
     acc = await _get_account(iid, aid, user)
     st = await _get_structure(iid, acc["structure_id"])
-    invs = [_invoice_view(i, st.get("late_fee")) for i in await db.fee_invoices.find({"account_id": aid}, {"_id": 0}).sort("due_date", 1).to_list(500)]
-    pays = await db.fee_payments.find({"account_id": aid}, {"_id": 0}).sort("collected_at", 1).to_list(1000)
+    arr = await db.fee_invoices.find({"institution_id": iid, "is_arrears": True, "student_id": acc["student_id"],
+                                      "academic_year": acc["academic_year"]}, {"_id": 0}).to_list(50)
+    invs = [_invoice_view(i, None) for i in arr] + \
+        [_invoice_view(i, st.get("late_fee")) for i in await db.fee_invoices.find({"account_id": aid}, {"_id": 0}).sort("due_date", 1).to_list(500)]
+    pays = await db.fee_payments.find({"$or": [{"account_id": aid}, {"invoice_id": {"$in": [a["id"] for a in arr]}}]},
+                                      {"_id": 0}).sort("collected_at", 1).to_list(1000)
     return {"account": acc, "structure": st, "invoices": invs, "payments": pays, "summary": _summarize(invs)}
 
 
@@ -11479,8 +11495,9 @@ async def record_fee_payment(body: FeePaymentIn, user: dict = Depends(require_fe
     inv = await db.fee_invoices.find_one({"id": body.invoice_id, "institution_id": iid}, {"_id": 0})
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    st = await _get_structure(iid, inv["structure_id"])
-    late = st.get("late_fee")
+    if inv.get("carried_forward_to"):
+        raise HTTPException(status_code=409, detail="This balance was carried forward to the next year — collect it against the 'Previous dues' invoice")
+    late = None if inv.get("is_arrears") else (await _get_structure(iid, inv["structure_id"])).get("late_fee")
     fine = _fine_for(inv, late, _today())
     if fine > 0:  # late fine is fixed onto the invoice (once) when a payment is recorded after grace
         await db.fee_invoices.update_one({"id": inv["id"], "fine_applied": False},
@@ -11611,12 +11628,41 @@ def _amount_in_words(amount):
     return out + " Only"
 
 
+_FEE_FONT_DIR = ROOT_DIR / "assets" / "fonts"
+
+
+def _inr(n):
+    """₹ + Indian digit grouping, always 2 decimals — e.g. 123456 → '₹1,23,456.00' (same format as the print views)."""
+    v = round(float(n or 0), 2)
+    whole, dec = f"{abs(v):.2f}".split(".")
+    if len(whole) > 3:
+        head, tail = whole[:-3], whole[-3:]
+        head = ",".join([head[max(0, i - 2):i] for i in range(len(head), 0, -2)][::-1])
+        whole = f"{head},{tail}"
+    return f"{'−' if v < 0 else ''}₹{whole}.{dec}"
+
+
+def _receipt_fonts():
+    """FreeSans (bundled, has the ₹ glyph, tabular digits) → fallback Helvetica with 'Rs.'."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    try:
+        for name, f in (("FeeSans", "FreeSans.ttf"), ("FeeSans-Bold", "FreeSansBold.ttf"), ("FeeSans-Oblique", "FreeSansOblique.ttf")):
+            if name not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont(name, str(_FEE_FONT_DIR / f)))
+        return "FeeSans", "FeeSans-Bold", "FeeSans-Oblique", _inr
+    except Exception:
+        return "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", lambda n: _inr(n).replace("₹", "Rs. ").replace("−", "-")
+
+
 def _receipt_pdf(d, logo_bytes=None) -> bytes:
     from reportlab.lib.pagesizes import A5, landscape
     from reportlab.lib.units import mm
     from reportlab.lib.utils import ImageReader
     from reportlab.pdfgen import canvas
     import io
+    R, B, I, money = _receipt_fonts()
+    SZ = 9  # one size for every amount row (totals only switch to bold)
     p, inv, school = d["payment"], d["invoice"], d["school"]
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=landscape(A5))
@@ -11628,41 +11674,43 @@ def _receipt_pdf(d, logo_bytes=None) -> bytes:
         except Exception:
             pass
     tx = x0 + (19 * mm if logo_bytes else 0)
-    c.setFont("Helvetica-Bold", 14); c.drawString(tx, y, (school.get("name") or "").strip()[:60])
-    c.setFont("Helvetica", 8.5); c.drawString(tx, y - 5 * mm, (school.get("address") or "")[:90])
-    c.setFont("Helvetica-Bold", 12); c.drawRightString(w - x0, y, "FEE RECEIPT")
-    c.setFont("Helvetica", 9); c.drawRightString(w - x0, y - 5 * mm, f"No. {p['receipt_no']}")
+    c.setFont(B, 14); c.drawString(tx, y, (school.get("name") or "").strip()[:60])
+    c.setFont(R, 8.5); c.drawString(tx, y - 5 * mm, (school.get("address") or "")[:90])
+    c.setFont(B, 12); c.drawRightString(w - x0, y, "FEE RECEIPT")
+    c.setFont(R, SZ); c.drawRightString(w - x0, y - 5 * mm, f"No. {p['receipt_no']}")
     c.drawRightString(w - x0, y - 9.5 * mm, f"Date: {(p.get('collected_at') or '')[:10]}")
     y -= 14 * mm; c.line(x0, y, w - x0, y); y -= 7 * mm
-    c.setFont("Helvetica", 9.5)
+    c.setFont(R, SZ)
     cls = f"{p.get('class_name') or ''} {p.get('section') or ''}".strip()
     c.drawString(x0, y, f"Student: {p.get('student_name')}"); c.drawString(w / 2, y, f"Admission no.: {d.get('admission_no') or '-'}"); y -= 5.5 * mm
     c.drawString(x0, y, f"Class: {cls}"); c.drawString(w / 2, y, f"Period: {p.get('period_label')} ({p.get('academic_year') or ''})"); y -= 8 * mm
-    c.setFont("Helvetica-Bold", 9); c.drawString(x0, y, "Fee head"); c.drawRightString(w - x0, y, "Amount (Rs.)"); y -= 2 * mm
-    c.line(x0, y, w - x0, y); y -= 5 * mm; c.setFont("Helvetica", 9)
-    rows = [(i["title"], i["amount"]) for i in (inv.get("items") or [])]
+    c.setFont(B, SZ); c.drawString(x0, y, "Fee head"); c.drawRightString(w - x0, y, "Amount"); y -= 2 * mm
+    c.line(x0, y, w - x0, y); y -= 5 * mm
+
+    def row(label, amount, bold=False):
+        nonlocal y
+        c.setFont(B if bold else R, SZ)
+        c.drawString(x0, y, str(label)[:70]); c.drawRightString(w - x0, y, money(amount)); y -= 5 * mm
+    for i in inv.get("items") or []:
+        row(i["title"], i["amount"])
     if inv.get("discount_amount"):
-        rows.append(("Discount", -inv["discount_amount"]))
+        row("Concession / discount", -inv["discount_amount"])
     if inv.get("fine_amount"):
-        rows.append(("Late fee", inv["fine_amount"]))
-    for t, a in rows:
-        c.drawString(x0, y, str(t)[:60]); c.drawRightString(w - x0, y, f"{a:,.2f}"); y -= 5 * mm
-    c.line(x0, y + 2 * mm, w - x0, y + 2 * mm); y -= 2 * mm
-    c.setFont("Helvetica-Bold", 10)
-    c.drawString(x0, y, f"Amount received ({p['method'].upper()}{' · ' + p['reference'] if p.get('reference') else ''})")
-    c.drawRightString(w - x0, y, f"{p['amount']:,.2f}"); y -= 5.5 * mm
-    c.setFont("Helvetica-Oblique", 9); c.drawString(x0, y, _amount_in_words(p["amount"])); y -= 5.5 * mm
-    c.setFont("Helvetica", 9)
-    c.drawString(x0, y, f"Invoice total {inv['amount_due']:,.2f} · balance remaining {inv['balance']:,.2f}"); y -= 5.5 * mm
+        row("Late fee", inv["fine_amount"])
+    c.line(x0, y + 2 * mm, w - x0, y + 2 * mm); y -= 1 * mm
+    row("Invoice total", inv["amount_due"], bold=True)
+    row(f"Amount received ({p['method'].upper()}{' · ' + p['reference'] if p.get('reference') else ''})", p["amount"], bold=True)
+    row("Balance remaining on this invoice", inv["balance"])
+    c.setFont(I, SZ); c.drawString(x0, y, f"Received: {_amount_in_words(p['amount'])}"); y -= 5.5 * mm
     if p.get("reversed"):
-        c.setFillColorRGB(0.75, 0.1, 0.1)
+        c.setFillColorRGB(0.75, 0.1, 0.1); c.setFont(R, SZ)
         c.drawString(x0, y, f"REVERSED {(p.get('reversed_at') or '')[:10]} · credit note {p.get('credit_note_no')} · {p.get('reverse_reason') or ''}"[:110])
         c.setFillColorRGB(0, 0, 0)
     c.line(x0, 18 * mm, x0 + 55 * mm, 18 * mm); c.line(w - x0 - 55 * mm, 18 * mm, w - x0, 18 * mm)
-    c.setFont("Helvetica", 8.5)
+    c.setFont(R, 8.5)
     c.drawString(x0, 14 * mm, f"Collected by: {p.get('collected_by') or ''}"[:50])
     c.drawRightString(w - x0, 14 * mm, "Authorised signatory")
-    c.setFont("Helvetica", 7); c.drawString(x0, 8 * mm, "System-generated receipt.")
+    c.setFont(R, 7); c.drawString(x0, 8 * mm, "System-generated receipt.")
     c.showPage(); c.save()
     return buf.getvalue()
 
@@ -11721,11 +11769,11 @@ async def _send_fee_reminder(inv, rtype, source, today, cfg, actor=None):
     view = _invoice_view(inv, late, today)
     if view["balance"] <= 0:
         return {"invoice_id": inv["id"], "status": "paid"}
-    key = f"fee:{inv['id']}:{today}"
+    key = f"fee:stu:{inv['student_id']}:{today}"  # Phase 50: max 1 fee reminder per student per day, any source
     r = await db.reminders_sent.update_one({"key": key}, {"$setOnInsert": {"key": key, "institution_id": iid, "type": rtype,
                                                                             "source": source, "sent_at": now_iso()}}, upsert=True)
     if r.matched_count:
-        return {"invoice_id": inv["id"], "status": "deduped"}
+        return {"invoice_id": inv["id"], "student_name": inv.get("student_name"), "status": "deduped"}
     stu = await db.students.find_one({"id": inv["student_id"]}, {"_id": 0}) or {}
     parents = await db.users.find({"institution_id": iid, "role": "parent", "student_ids": inv["student_id"]},
                                   {"_id": 0, "id": 1, "phone": 1, "name": 1}).to_list(10)
@@ -11758,9 +11806,19 @@ async def _send_fee_reminder(inv, rtype, source, today, cfg, actor=None):
     return {"invoice_id": inv["id"], "student_name": sname, "status": status, "type": rtype}
 
 
+async def _inst_today(iid):
+    """Calendar date in the institution's timezone (fallback Asia/Kolkata) — the fee-reminder day boundary."""
+    from zoneinfo import ZoneInfo
+    inst = await db.institutions.find_one({"id": iid}, {"_id": 0, "timezone": 1}) or {}
+    try:
+        tz = ZoneInfo(inst.get("timezone") or "Asia/Kolkata")
+    except Exception:
+        tz = ZoneInfo("Asia/Kolkata")
+    return datetime.now(tz).date().isoformat()
+
+
 async def _fee_reminder_sweep(today=None, only_iid=None):
-    today = today or _today()
-    out, cfgs = [], {}
+    out, cfgs, days = [], {}, {}
     q = {"status": {"$in": ["pending", "partial", "overdue"]}}
     if only_iid:
         q["institution_id"] = only_iid
@@ -11768,12 +11826,13 @@ async def _fee_reminder_sweep(today=None, only_iid=None):
         iid = inv["institution_id"]
         if iid not in cfgs:
             cfgs[iid] = await _fee_reminder_cfg(iid)
-        cfg = cfgs[iid]
+            days[iid] = today or await _inst_today(iid)
+        cfg, day = cfgs[iid], days[iid]
         if not cfg["enabled"] or not inv.get("due_date"):
             continue
-        rtype = _fee_reminder_type(inv["due_date"], today, cfg)
+        rtype = _fee_reminder_type(inv["due_date"], day, cfg)
         if rtype:
-            out.append(await _send_fee_reminder(inv, rtype, "auto", today, cfg))
+            out.append(await _send_fee_reminder(inv, rtype, "auto", day, cfg))
     return out
 
 
@@ -11801,7 +11860,7 @@ async def put_fee_reminder_settings(body: FeeReminderSettingsIn, user: dict = De
 @api.post("/fees/reminders/run")
 async def run_fee_reminders(payload: dict = Body(default={}), user: dict = Depends(require_fee_admin)):
     """Run the auto-reminder rules now for this school (optionally 'as_of' a date, for checks/testing)."""
-    as_of = (payload or {}).get("as_of") or _today()
+    as_of = (payload or {}).get("as_of") or await _inst_today(user["institution_id"])
     try:
         datetime.strptime(as_of, "%Y-%m-%d")
     except ValueError:
@@ -11817,7 +11876,7 @@ async def remind_fee_invoice(inv_id: str, user: dict = Depends(require_fee_admin
     inv = await db.fee_invoices.find_one({"id": inv_id, "institution_id": iid}, {"_id": 0})
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    res = await _send_fee_reminder(inv, "manual", "manual", _today(), await _fee_reminder_cfg(iid), actor=user)
+    res = await _send_fee_reminder(inv, "manual", "manual", await _inst_today(iid), await _fee_reminder_cfg(iid), actor=user)
     if res["status"] == "paid":
         raise HTTPException(status_code=400, detail="This invoice is already fully paid")
     await audit(user, "fee_remind", "fee_invoices", inv_id, f"{inv.get('student_name')} · {inv['period_label']} · {res['status']}", iid)
@@ -11831,7 +11890,7 @@ async def remind_fee_class(payload: dict = Body(...), user: dict = Depends(requi
     cn = (payload.get("class_name") or "").strip()
     if not cn:
         raise HTTPException(status_code=400, detail="class_name is required")
-    today, cfg = _today(), await _fee_reminder_cfg(iid)
+    today, cfg = await _inst_today(iid), await _fee_reminder_cfg(iid)
     invs = await db.fee_invoices.find({"institution_id": iid, "class_name": cn, "status": {"$in": ["pending", "partial", "overdue"]}},
                                       {"_id": 0}).sort("due_date", 1).to_list(5000)
     seen, results = set(), []
@@ -11915,6 +11974,340 @@ async def portal_fees(user: dict = Depends(require_roles("student"))):
     if not user.get("student_id"):
         raise HTTPException(status_code=404, detail="No student profile linked to this account")
     return await _student_fees(user["institution_id"], user["student_id"])
+
+
+# ==================== PHASE 50: FEES PART C (defaulters, dues carry-forward, monthly summary) ====================
+# Money rules: balances always come from _invoice_view (concessions already net out of `total`, late fine
+# projected, carried-forward invoices = 0) so every figure reconciles with the student account ledger.
+import csv as _csv  # noqa: E402
+import io as _io  # noqa: E402
+
+AGE_BUCKETS = {"1-30": (1, 30), "31-60": (31, 60), "60+": (61, 10 ** 6)}
+
+
+async def _fee_view_scope(user):
+    """('admin', None) | ('principal', class_names|None=whole school) | ('teacher', {(class, section)}) — else 403."""
+    if user.get("role") == "institution_admin" and user.get("institution_id"):
+        return "admin", None
+    if await active_principal(user):
+        sc = await _fee_scope(user)
+        return "principal", (None if sc is None else sc[0])
+    if user.get("role") == "teacher" and user.get("institution_id") and user.get("status") != "inactive":
+        homes = await db.sections.find({"institution_id": user["institution_id"], "class_teacher_id": user["id"]},
+                                       {"_id": 0, "class_name": 1, "name": 1}).to_list(100)
+        if homes:
+            return "teacher", {(h["class_name"], h["name"]) for h in homes}
+    raise HTTPException(status_code=403, detail="Access denied")
+
+
+def _stu_in_scope(kind, scope, s):
+    if scope is None:
+        return True
+    if kind == "principal":
+        return s.get("class_name") in scope
+    return (s.get("class_name"), s.get("section")) in scope
+
+
+async def _open_views_by_student(iid, student_ids, today=None):
+    today = today or _today()
+    invs = await db.fee_invoices.find({"institution_id": iid, "student_id": {"$in": list(student_ids)},
+                                       "status": {"$ne": "paid"}}, {"_id": 0}).sort("due_date", 1).to_list(100000)
+    late = await _late_map({i["structure_id"] for i in invs if i.get("structure_id")})
+    out = {}
+    for i in invs:
+        v = _invoice_view(i, late.get(i.get("structure_id")), today)
+        if v["balance"] > 0:
+            out.setdefault(i["student_id"], []).append(v)
+    return out
+
+
+async def _promo_dues(iid, decisions):
+    views = await _open_views_by_student(iid, {d["student_id"] for d in decisions if d.get("student_id")})
+    dues = {sid: _r2(sum(v["balance"] for v in vs)) for sid, vs in views.items()}
+    return {"dues": dues, "dues_summary": {"students": len(dues), "total": _r2(sum(dues.values()))}}
+
+
+async def _defaulter_rows(user, academic_unit_id="", class_name="", section="", today=None):
+    kind, scope = await _fee_view_scope(user)
+    iid = user["institution_id"]
+    today = today or await _inst_today(iid)
+    owing = await db.fee_invoices.distinct("student_id", {"institution_id": iid, "status": {"$ne": "paid"}})
+    sq = {"institution_id": iid, "id": {"$in": owing}}
+    names = None
+    if academic_unit_id:
+        names = {c["name"] for c in await db.classes.find({"institution_id": iid, "academic_unit_id": academic_unit_id},
+                                                          {"_id": 0, "name": 1}).to_list(500)}
+    if class_name:
+        names = {class_name} if names is None else names & {class_name}
+    if names is not None:
+        sq["class_name"] = {"$in": list(names)}
+    if section:
+        sq["section"] = section
+    studs = {s["id"]: s for s in await db.students.find(sq, {"_id": 0, "id": 1, "first_name": 1, "last_name": 1, "admission_no": 1,
+                                                             "class_name": 1, "section": 1, "guardian_name": 1, "guardian_phone": 1,
+                                                             "enrollment_status": 1}).to_list(50000) if _stu_in_scope(kind, scope, s)}
+    views = await _open_views_by_student(iid, studs.keys(), today)
+    parents = {}
+    async for p in db.users.find({"institution_id": iid, "role": "parent", "student_ids": {"$in": list(views)}},
+                                 {"_id": 0, "name": 1, "phone": 1, "student_ids": 1}):
+        for sid in p.get("student_ids") or []:
+            parents.setdefault(sid, p)
+    last = {r["_id"]: r async for r in db.fee_reminders.aggregate([
+        {"$match": {"institution_id": iid, "student_id": {"$in": list(views)}}}, {"$sort": {"at": -1}},
+        {"$group": {"_id": "$student_id", "at": {"$first": "$at"}, "status": {"$first": "$status"}}}])}
+    tday = datetime.strptime(today, "%Y-%m-%d").date()
+    rows = []
+    for sid, vs in views.items():
+        od = [v for v in vs if v.get("due_date") and v["due_date"] < today]
+        if not od:
+            continue
+        s, p = studs[sid], parents.get(sid) or {}
+        oldest = min(v["due_date"] for v in od)
+        days = (tday - datetime.strptime(oldest, "%Y-%m-%d").date()).days
+        rows.append({
+            "student_id": sid, "student_name": f"{s.get('first_name', '')} {s.get('last_name', '')}".strip(),
+            "admission_no": s.get("admission_no"), "class_name": s.get("class_name"), "section": s.get("section"),
+            "enrollment_status": s.get("enrollment_status"),
+            "parent_name": s.get("guardian_name") or p.get("name"),
+            "parent_phone": _norm_phone(s.get("guardian_phone")) or p.get("phone"),
+            "overdue_amount": _r2(sum(v["balance"] for v in od)), "total_outstanding": _r2(sum(v["balance"] for v in vs)),
+            "overdue_invoices": len(od), "oldest_due_date": oldest, "days_late": days,
+            "bucket": next(k for k, (lo, hi) in AGE_BUCKETS.items() if lo <= days <= hi),
+            "last_reminder_at": (last.get(sid) or {}).get("at"), "last_reminder_status": (last.get(sid) or {}).get("status")})
+    upcoming = [v for vs in views.values() for v in vs if not v.get("due_date") or v["due_date"] >= today]
+    open_info = {"as_of": today, "not_yet_due_invoices": len(upcoming),
+                 "not_yet_due_amount": _r2(sum(v["balance"] for v in upcoming)),
+                 "next_due_date": min((v["due_date"] for v in upcoming if v.get("due_date")), default=None)}
+    return kind, scope, rows, open_info
+
+
+def _defaulter_filter(rows, bucket, min_amount, sort):
+    if bucket and bucket not in AGE_BUCKETS:
+        raise HTTPException(status_code=400, detail="bucket must be one of 1-30, 31-60, 60+")
+    if sort not in ("amount", "days_late"):
+        raise HTTPException(status_code=400, detail="sort must be 'amount' or 'days_late'")
+    rows = [r for r in rows if r["overdue_amount"] >= (min_amount or 0)]
+    buckets = {k: sum(1 for r in rows if r["bucket"] == k) for k in AGE_BUCKETS}
+    if bucket:
+        rows = [r for r in rows if r["bucket"] == bucket]
+    key = (lambda r: (-r["days_late"], -r["overdue_amount"], r["student_name"])) if sort == "days_late" \
+        else (lambda r: (-r["overdue_amount"], -r["days_late"], r["student_name"]))
+    return sorted(rows, key=key), buckets
+
+
+async def _defaulter_filters(iid, kind, scope):
+    if kind == "teacher":
+        return {"units": [], "classes": sorted({c for c, _ in scope}), "sections": sorted({s for _, s in scope})}
+    q = {"institution_id": iid} if scope is None else {"institution_id": iid, "name": {"$in": list(scope)}}
+    classes = await db.classes.find(q, {"_id": 0, "name": 1, "academic_unit_id": 1}).to_list(2000)
+    uids = {c.get("academic_unit_id") for c in classes}
+    units = await db.academic_units.find({"institution_id": iid, "id": {"$in": list(uids)}}, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+    secs = await db.sections.distinct("name", {"institution_id": iid, "class_name": {"$in": [c["name"] for c in classes]}})
+    return {"units": units, "classes": sorted({c["name"] for c in classes}, key=lambda n: (_grade_num(n) or 999, n)),
+            "sections": sorted(secs)}
+
+
+@api.get("/fees/defaulters")
+async def fee_defaulters(academic_unit_id: str = "", class_name: str = "", section: str = "", bucket: str = "",
+                         min_amount: float = Query(0, ge=0), sort: str = "amount",
+                         page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=1000),
+                         user: dict = Depends(get_current_user)):
+    """Students with invoices past due date and balance > 0 (partial payments → remaining balance; concessions excluded)."""
+    iid = user.get("institution_id")
+    kind, scope, rows, open_info = await _defaulter_rows(user, academic_unit_id, class_name, section)
+    rows, buckets = _defaulter_filter(rows, bucket, min_amount, sort)
+    school = await db.institutions.find_one({"id": iid}, {"_id": 0, "name": 1})
+    return {"as_of": open_info["as_of"], "upcoming": open_info, "scope": kind, "can_remind": kind != "teacher", "total": len(rows), "page": page,
+            "page_size": page_size, "rows": rows[(page - 1) * page_size: page * page_size], "buckets": buckets,
+            "totals": {"students": len(rows), "overdue": _r2(sum(r["overdue_amount"] for r in rows)),
+                       "outstanding": _r2(sum(r["total_outstanding"] for r in rows))},
+            "filters": await _defaulter_filters(iid, kind, scope),
+            "school": {"name": (school or {}).get("name"), "logo_src": await _school_logo_src(iid)}}
+
+
+@api.get("/fees/defaulters/export.csv")
+async def fee_defaulters_csv(academic_unit_id: str = "", class_name: str = "", section: str = "", bucket: str = "",
+                             min_amount: float = Query(0, ge=0), sort: str = "amount", user: dict = Depends(get_current_user)):
+    _, _, rows, _ = await _defaulter_rows(user, academic_unit_id, class_name, section)
+    rows, _ = _defaulter_filter(rows, bucket, min_amount, sort)
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["Student", "Admission no", "Class", "Section", "Parent", "Phone", "Overdue amount", "Total outstanding",
+                "Oldest due date", "Days late", "Ageing", "Last reminder at"])
+    for r in rows:
+        w.writerow([r["student_name"], r["admission_no"] or "", r["class_name"] or "", r["section"] or "", r["parent_name"] or "",
+                    r["parent_phone"] or "", f"{r['overdue_amount']:.2f}", f"{r['total_outstanding']:.2f}", r["oldest_due_date"],
+                    r["days_late"], r["bucket"], (r["last_reminder_at"] or "")[:16]])
+    await audit(user, "fee_defaulters_export", "fee_invoices", None, f"{len(rows)} rows", user["institution_id"])
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="fee-defaulters-{_today()}.csv"'})
+
+
+class DefaulterRemindIn(_BM):
+    student_ids: _List[str] = _F(min_length=1, max_length=500)
+
+
+_REMIND_STATUS = {"sent": "sent", "deduped": "skipped_throttled", "bell_only_no_phone": "no_contact",
+                  "bell_only_failed": "failed", "paid": "no_dues"}
+
+
+@api.post("/fees/defaulters/remind")
+async def fee_defaulters_remind(body: DefaulterRemindIn, user: dict = Depends(require_admin_or_principal)):
+    """One-tap reminders via the Phase 49 pipeline. Throttle: 1 fee reminder per student per day (shared with auto)."""
+    iid = user["institution_id"]
+    kind, scope = await _fee_view_scope(user)
+    today, cfg = await _inst_today(iid), await _fee_reminder_cfg(iid)
+    results = []
+    for sid in dict.fromkeys(body.student_ids):
+        s = await db.students.find_one({"id": sid, "institution_id": iid}, {"_id": 0, "class_name": 1, "section": 1,
+                                                                            "first_name": 1, "last_name": 1})
+        if not s or not _stu_in_scope(kind, scope, s):
+            results.append({"student_id": sid, "status": "not_found" if not s else "out_of_scope"})
+            continue
+        name = f"{s.get('first_name', '')} {s.get('last_name', '')}".strip()
+        vs = (await _open_views_by_student(iid, [sid], today)).get(sid, [])
+        if not vs:
+            results.append({"student_id": sid, "student_name": name, "status": "no_dues"})
+            continue
+        target = next((v for v in vs if v.get("due_date") and v["due_date"] < today), vs[0])
+        inv = await db.fee_invoices.find_one({"id": target["id"]}, {"_id": 0})
+        r = await _send_fee_reminder(inv, "manual", "defaulter", today, cfg, actor=user)
+        results.append({"student_id": sid, "student_name": name, "invoice_id": inv["id"],
+                        "status": _REMIND_STATUS.get(r["status"], r["status"]), "detail": r["status"]})
+    summary = {k: sum(1 for r in results if r["status"] == k) for k in ("sent", "skipped_throttled", "no_contact", "failed")}
+    await audit(user, "fee_defaulters_remind", "fee_reminders", None, f"{len(results)} students: {summary}", iid)
+    return {"results": results, **summary}
+
+
+async def _carry_forward_dues(iid, from_year, to_year, student_ids, actor, run_id=None):
+    """Additive + idempotent: one 'Previous dues' arrears invoice per student per from→to year, linked to the source
+    invoices (which are only FLAGGED carried_forward_to — amounts/payments are never touched)."""
+    today = _today()
+    out = {"created": 0, "already_carried": 0, "amount": 0.0, "arrears_invoice_ids": []}
+    for sid in dict.fromkeys(student_ids):
+        key = f"{sid}:{from_year}>{to_year}"
+        if await db.fee_invoices.find_one({"institution_id": iid, "arrears_key": key}, {"_id": 1}):
+            out["already_carried"] += 1
+            continue
+        src = await db.fee_invoices.find({"institution_id": iid, "student_id": sid, "academic_year": from_year,
+                                          "carried_forward_to": {"$exists": False}, "status": {"$ne": "paid"}},
+                                         {"_id": 0}).sort("due_date", 1).to_list(500)
+        late = await _late_map({i["structure_id"] for i in src if i.get("structure_id")})
+        open_ = [(i, v) for i in src for v in [_invoice_view(i, late.get(i.get("structure_id")), today)] if v["balance"] > 0]
+        if not open_:
+            continue
+        stu = await db.students.find_one({"id": sid, "institution_id": iid}, {"_id": 0}) or {}
+        items = [{"head_id": None, "title": f"Previous dues {from_year} · {i.get('period_label')}", "amount": v["balance"],
+                  "source_invoice_id": i["id"]} for i, v in open_]
+        total = _r2(sum(x["amount"] for x in items))
+        due = min((i.get("due_date") for i, _ in open_ if i.get("due_date")), default=today)
+        doc = {"id": str(uuid.uuid4()), "institution_id": iid, "account_id": f"arrears:{sid}:{to_year}", "structure_id": None,
+               "frequency": "arrears", "period_label": f"Previous dues {from_year}", "student_id": sid,
+               "student_name": f"{stu.get('first_name', '')} {stu.get('last_name', '')}".strip() or open_[0][0].get("student_name"),
+               "class_name": stu.get("class_name"), "section": stu.get("section"), "academic_year": to_year,
+               "items": items, "subtotal": total, "discount_amount": 0.0, "fine_amount": 0.0, "fine_applied": True,
+               "total": total, "paid_amount": 0.0, "due_date": due, "status": "overdue" if due < today else "pending",
+               "is_arrears": True, "arrears_key": key, "from_year": from_year, "source_invoice_ids": [i["id"] for i, _ in open_],
+               "promotion_run_id": run_id, "generated_at": now_iso(), "generated_by": (actor or {}).get("email")}
+        try:
+            await db.fee_invoices.insert_one(dict(doc))
+        except DuplicateKeyError:
+            out["already_carried"] += 1
+            continue
+        for i, v in open_:
+            await db.fee_invoices.update_one({"id": i["id"], "carried_forward_to": {"$exists": False}}, {"$set": {
+                "carried_forward_to": doc["id"], "carried_forward_amount": v["balance"], "carried_forward_at": now_iso(),
+                "carried_forward_year": to_year}})
+        await audit(actor, "fee_dues_carry_forward", "fee_invoices", doc["id"],
+                    f"{doc['student_name']} · ₹{total:,.2f} · {from_year} → {to_year} · {len(items)} invoice(s)", iid)
+        out["created"] += 1
+        out["amount"] = _r2(out["amount"] + total)
+        out["arrears_invoice_ids"].append(doc["id"])
+    return out
+
+
+@api.post("/fees/carry-forward")
+async def fee_carry_forward(payload: dict = Body(...), user: dict = Depends(require_fee_admin)):
+    """Re-run (idempotent) the dues carry-forward for an executed promotion run."""
+    iid = user["institution_id"]
+    run = await _promo_run_or_404(iid, (payload or {}).get("run_id") or "")
+    if run["status"] != "executed":
+        raise HTTPException(status_code=409, detail="Only an executed promotion run can carry dues forward")
+    decs = await db.promotion_decisions.find({"run_id": run["id"], "decision": {"$in": ["promote", "detain"]}},
+                                             {"_id": 0, "student_id": 1}).to_list(50000)
+    return await _carry_forward_dues(iid, run["from_year"], run["to_year"], [d["student_id"] for d in decs], user, run["id"])
+
+
+@api.get("/fees/monthly-summary")
+async def fee_monthly_summary(month: str = "", user: dict = Depends(require_admin_or_principal)):
+    """Per class: billed = invoices due in the month (net of concessions), collected = payments received in the month
+    (same rule as the Day Book), outstanding = remaining balance of the month's invoices."""
+    iid = user["institution_id"]
+    m = month or _today()[:7]
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", m):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    scope = await _fee_scope(user)
+    iq = {"institution_id": iid, "due_date": {"$gte": f"{m}-01", "$lte": f"{m}-31"}, "is_arrears": {"$ne": True}}
+    pq = {"institution_id": iid, "collected_at": {"$gte": f"{m}-01", "$lt": f"{m}-32"}}
+    if scope is not None:
+        iq["class_name"] = pq["class_name"] = {"$in": list(scope[0])}
+    rows = {}
+
+    def row(cn):
+        k = cn or "—"
+        return rows.setdefault(k, {"class_name": k, "invoices": 0, "gross": 0.0, "concession": 0.0, "billed": 0.0,
+                                   "outstanding": 0.0, "carried_forward": 0.0, "collected": 0.0, "prev_dues_collected": 0.0,
+                                   "receipts": 0})
+    invs = await db.fee_invoices.find(iq, {"_id": 0}).to_list(100000)
+    late = await _late_map({i["structure_id"] for i in invs if i.get("structure_id")})
+    for i in invs:
+        v, r = _invoice_view(i, late.get(i.get("structure_id"))), row(i.get("class_name"))
+        r["invoices"] += 1
+        r["gross"] = _r2(r["gross"] + float(i.get("subtotal") or 0) + v["fine_amount"])
+        r["concession"] = _r2(r["concession"] + float(i.get("discount_amount") or 0))
+        r["billed"] = _r2(r["billed"] + v["amount_due"])
+        if i.get("carried_forward_to"):
+            r["carried_forward"] = _r2(r["carried_forward"] + float(i.get("carried_forward_amount") or 0))
+        else:
+            r["outstanding"] = _r2(r["outstanding"] + v["balance"])
+    pays = await db.fee_payments.find(pq, {"_id": 0, "items": 0}).to_list(100000)
+    live = [p for p in pays if not p.get("reversed")]
+    rev = [p for p in pays if p.get("reversed")]
+    methods, daily = {}, {}
+    inv_meta = {i["id"]: i async for i in db.fee_invoices.find({"id": {"$in": list({p["invoice_id"] for p in live})}},
+                                                                {"_id": 0, "id": 1, "due_date": 1, "is_arrears": 1})}
+    for p in live:
+        r = row(p.get("class_name"))
+        r["collected"] = _r2(r["collected"] + p["amount"]); r["receipts"] += 1
+        src = inv_meta.get(p["invoice_id"]) or {}
+        if src.get("is_arrears") or (src.get("due_date") or "9999") < f"{m}-01":
+            r["prev_dues_collected"] = _r2(r["prev_dues_collected"] + p["amount"])
+        e = methods.setdefault(p["method"], {"key": p["method"], "total": 0.0, "count": 0})
+        e["total"] = _r2(e["total"] + p["amount"]); e["count"] += 1
+        d = daily.setdefault(p["collected_at"][:10], {"date": p["collected_at"][:10], "total": 0.0, "count": 0})
+        d["total"] = _r2(d["total"] + p["amount"]); d["count"] += 1
+
+    def pct(r):
+        return round((r["billed"] - r["outstanding"] - r["carried_forward"]) / r["billed"] * 100, 1) if r["billed"] else None
+    out_rows = sorted(rows.values(), key=lambda r: (_grade_num(r["class_name"]) or 999, r["class_name"]))
+    for r in out_rows:
+        r["collection_pct"] = pct(r)
+    totals = {k: _r2(sum(r[k] for r in out_rows)) for k in ("gross", "concession", "billed", "outstanding", "carried_forward",
+                                                            "collected", "prev_dues_collected")}
+    totals.update({"invoices": sum(r["invoices"] for r in out_rows), "receipts": sum(r["receipts"] for r in out_rows)})
+    totals["collection_pct"] = pct(totals)
+    school = await db.institutions.find_one({"id": iid}, {"_id": 0, "name": 1})
+    return {"month": m, "as_of": _today(), "school": {"name": (school or {}).get("name"), "logo_src": await _school_logo_src(iid)},
+            "rows": out_rows, "totals": totals, "by_method": sorted(methods.values(), key=lambda e: -e["total"]),
+            "daily": sorted(daily.values(), key=lambda d: d["date"]),
+            "reversed": {"count": len(rev), "amount": _r2(sum(p["amount"] for p in rev))}}
+
+
+@app.on_event("startup")
+async def _fees_c_indexes():
+    await db.fee_invoices.create_index("arrears_key", unique=True, partialFilterExpression={"arrears_key": {"$exists": True}})
+    await db.fee_invoices.create_index([("institution_id", 1), ("student_id", 1), ("status", 1)])
+    await db.fee_reminders.create_index([("institution_id", 1), ("student_id", 1), ("at", -1)])
 
 
 @app.on_event("startup")

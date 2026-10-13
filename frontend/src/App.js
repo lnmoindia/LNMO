@@ -58,6 +58,7 @@ import TeacherMarksList from "./pages/teacher/TeacherMarksList";
 import TeacherProfile from "./pages/teacher/TeacherProfile";
 import TeacherHomework from "./pages/teacher/TeacherHomework";
 import TeacherAssignments from "./pages/teacher/TeacherAssignments";
+import TeacherFeeDefaulters from "./pages/teacher/TeacherFeeDefaulters";
 import NoticesPage from "./pages/institution/NoticesPage";
 import PromotionPage from "./pages/institution/PromotionPage";
 import FeesPage from "./pages/institution/fees/FeesPage";
@@ -206,6 +207,7 @@ function App() {
               <Route path="ai-tutor/curriculum/:cid" element={<CurriculumDetailPage />} />
               <Route path="profile" element={<TeacherProfile />} />
               <Route path="attendance" element={<AttendancePage teacherMode />} />
+              <Route path="fee-defaulters" element={<TeacherFeeDefaulters />} />
             </Route>
 
             <Route path="*" element={<NotFoundPage />} />

@@ -10,13 +10,14 @@ const TONE = {
   pending: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
   overdue: "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400",
   reversed: "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400",
+  carried_forward: "bg-violet-50 text-violet-700 dark:bg-violet-500/10 dark:text-violet-400",
 };
 
 export const StatusChip = ({ status, testid }) => (
-  <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold capitalize ${TONE[status] || TONE.pending}`} data-testid={testid}>{status}</span>
+  <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold capitalize ${TONE[status] || TONE.pending}`} data-testid={testid}>{String(status).replace("_", " ")}</span>
 );
 
-export const FREQ_LABEL = { annual: "Annual", term: "Per term", monthly: "Monthly", one_time: "One-time" };
+export const FREQ_LABEL = { annual: "Annual", term: "Per term", monthly: "Monthly", one_time: "One-time", arrears: "Arrears" };
 
 export const printReceiptById = async (pid) => {
   try {

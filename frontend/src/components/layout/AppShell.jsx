@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Menu, X, Moon, Sun, LogOut, ChevronDown, Search, MessageSquareWarning } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useTheme } from "../../context/ThemeContext";
@@ -12,7 +12,12 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 
-const SidebarNav = ({ nav, onNavigate, badges = {} }) => (
+const SidebarNav = ({ nav, onNavigate, badges = {} }) => {
+  const loc = useLocation();
+  const full = loc.pathname + loc.search;
+  const queryHit = nav.some((g) => g.items.some((i) => i.path.includes("?") && i.path === full));
+  const active = (item, isActive) => (item.path.includes("?") ? item.path === full : isActive && !queryHit);
+  return (
   <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
     {nav.map((group) => (
       <div key={group.group}>
@@ -26,7 +31,7 @@ const SidebarNav = ({ nav, onNavigate, badges = {} }) => (
               data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
               className={({ isActive }) =>
                 `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors duration-150 ${
-                  isActive
+                  active(item, isActive)
                     ? "bg-indigo-600 text-white font-medium"
                     : "text-slate-400 hover:text-white hover:bg-slate-800"
                 }`
@@ -43,7 +48,8 @@ const SidebarNav = ({ nav, onNavigate, badges = {} }) => (
       </div>
     ))}
   </nav>
-);
+  );
+};
 
 export default function AppShell({ nav, consoleLabel }) {
   const { user, logout } = useAuth();

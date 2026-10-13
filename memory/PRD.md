@@ -638,3 +638,35 @@ User-confirmed rules: same-section default (8-A→9-A) with per-student override
   - Day book: GET /api/fees/day-book?date= (UTC day) groups collections by method, collector and class; reversals are excluded from totals but listed. Print/PDF via printDayBook. Principals see only their scope.
   - Receipt PDF: GET /api/fees/payments/{id}/receipt.pdf (reportlab, landscape A5, logo, amount in words), with the same ownership rules as the receipt view.
   - Tests: test_phase49.py 6/6. LPGS STUB acceptance run, then its sends were cleaned up (quota restored).
+- Phase 50 (2026-10-13): Fees part C.
+  - Defaulters: GET /api/fees/defaulters returns students with an invoice past its due date and a balance > 0. Balances come from _invoice_view, so partial payments count only what is left, concessions are already netted off, late fines are projected, and carried-forward invoices count as 0. The figures match the account ledgers.
+    - Filters: unit, class, section, ageing bucket (1-30 / 31-60 / 60+ days), min_amount, sort (amount | days_late), pagination.
+    - Each row has the parent's name and phone and the last reminder (from fee_reminders).
+    - Also: GET /api/fees/defaulters/export.csv; POST /api/fees/defaulters/remind {student_ids}, which uses the Phase 49 pipeline (STUB) and returns sent / skipped_throttled / no_contact / failed for each student.
+    - Scope: admin sees the whole school, principals their divisions, class teachers their own sections read-only (remind is 403). Teachers who are not class teachers, parents and students get 403.
+  - Throttle: _send_fee_reminder now keys on fee:stu:{student_id}:{UTC date}, so at most one fee reminder per student per day is sent, from any source (automatic, invoice, class, defaulter).
+  - Monthly summary: GET /api/fees/monthly-summary?month=YYYY-MM gives per-class figures: gross, concession, billed (net, invoices due in the month, arrears excluded), collected (receipts dated in the month, same rule as the day book), outstanding, carried forward and collection % (share of the month's billing settled). Also by-method totals, daily totals, grand totals and the reversed amount. Teachers get 403.
+  - Promotion dues: preview and get-run return dues and dues_summary; the UI shows a "Dues pending ₹X" badge per student and a summary banner. This is a warning only and does not block promotion.
+  - Carry-forward: on execute, students who are promoted or detained get one "Previous dues {from_year}" arrears invoice (is_arrears, account_id arrears:{sid}:{to_year}, one item per source invoice, linked via source_invoice_ids).
+    - Source invoices are only flagged (carried_forward_to/amount/at); their amounts are untouched. Paying a source invoice afterwards returns 409; the arrears invoice is paid normally.
+    - It is idempotent (unique arrears_key) and audit-logged. POST /api/fees/carry-forward {run_id} re-runs it for an executed run. Arrears attach to the student's new-year account ledger.
+  - UI: Fees tabs "Defaulters" and "Monthly Summary" (/app/fees), teacher page /teacher/fee-defaulters, print views printDefaulters and printMonthlySummary (A4, same style as the Day Book).
+  - Data: LPGS has no overdue invoices yet (earliest due date 2026-11-15), so it was left untouched. The demo uses a separate TEST school, p50demo (seed: tests/seed_phase50_demo.py).
+  - Tests: test_phase50.py 6/6, regressions for phases 41/42/48/49 pass, and testing agent iteration_34 was 100% green.
+  - Backlog: online payment gateway; rollback does not reverse arrears; throttle date is UTC, not the school's timezone; a supplemental arrears line if new from-year invoices appear after carry-forward.
+- Phase 50 follow-up (2026-10-13): reported "can't see defaulters".
+  - Preview: could not reproduce. The tab, the teacher nav item and the data all render at 1920, 1280 and 1024 px, after a fresh login and after a hard refresh, with no console or API errors. There is no service worker and no feature flag.
+  - Likely causes: (a) the user is viewing LPGS, which has 0 overdue invoices, so the list looked blank; or (b) the user is on a deployed build that has not been redeployed, which also has no TEST school data, because that data lives only in the preview DB.
+  - Fixes:
+    - Explicit empty state ("No overdue fees as of … — N open invoices (₹X) not yet due — earliest due date is 15 Nov 2026"); the backend returns `upcoming`.
+    - Explicit 403 card for teachers who are not class teachers (previously the page was blank).
+    - Fees tabs are now controlled by `?tab=`; a "Fee Defaulters" sidebar link (/app/fees?tab=defaulters) was added for admin and principal. The sidebar active state now honours the query string.
+  - Reminder throttle day = institution timezone (`institutions.timezone`, falling back to Asia/Kolkata), via `_inst_today`. It applies to the automatic sweep (per institution), run (default as_of), invoice remind, class remind, defaulter remind, and the defaulters as_of/days late. The Day Book and the monthly collected figure stay UTC-dated (receipt timestamps).
+  - Monthly summary: `prev_dues_collected` per class and in the totals = payments received this month against invoices due before the month, plus arrears invoices. Added to the UI column, the footnote and the print view.
+  - Tests: test_phase50.py 7/7 (new timezone-boundary test, plus previous-dues asserts); 41/42/48/49 still pass.
+- Phase 50 polish (2026-10-13): fee print/PDF number formatting.
+  - Cause: the print views used Georgia, whose old-style (non-lining) numerals render different digit heights.
+  - Fee print views (receipt, day book, defaulters, monthly) now share one FEE_STYLES block: one sans font stack, `font-variant-numeric: lining-nums tabular-nums`, and right-aligned `.num` cells and headers.
+  - One shared formatter for currency (₹ + en-IN grouping, always 2 decimals, `−₹` for negatives), percentages (1 decimal) and counts. S.No is centred. A4 portrait via `@page`; each sample is 1 page.
+  - Receipt PDF: bundled FreeSans (GPL with font exception) in backend/assets/fonts (it has ₹ and tabular digits), size 9 for every amount row (totals bold, same size), and `_inr()` with Indian grouping. Invoice total and balance moved into right-aligned rows. Falls back to Helvetica with "Rs." if the font is missing.
+  - Before/after renders are in /app/tests/print_render (gen.mjs + shot.py).

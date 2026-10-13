@@ -1,0 +1,45 @@
+<!DOCTYPE html><html><head><title>Monthly fee summary 2026-10</title><style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: #1a202c; padding: 28px; }
+  h1 { font-size: 20px; margin-bottom: 2px; }
+  h2 { font-size: 14px; font-weight: normal; color: #555; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th, td { border: 1px solid #cbd5e0; padding: 6px 8px; font-size: 12px; text-align: left; }
+  th { background: #f1f5f9; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
+  .muted { color: #718096; font-size: 11px; }
+  .break-row td { background: #f8fafc; text-align: center; color: #94a3b8; font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #1a202c; padding-bottom: 10px; margin-bottom: 6px; }
+  .badge { font-size: 11px; }
+  .totals td { font-weight: bold; background: #f8fafc; }
+  .sig { display: flex; justify-content: space-between; margin-top: 48px; font-size: 11px; color: #555; }
+  .sig span { border-top: 1px solid #999; padding-top: 4px; width: 160px; text-align: center; }
+  .sigrow { display: flex; justify-content: space-around; align-items: flex-end; margin-top: 56px; gap: 24px; }
+  .sigcol { text-align: center; width: 180px; }
+  .sigimg { height: 46px; width: auto; max-width: 150px; object-fit: contain; display: block; margin: 0 auto 2px; }
+  .sigline { border-top: 1px solid #999; margin-top: 4px; }
+  .signame { font-size: 11px; font-weight: bold; margin-top: 4px; }
+  .sigrole { font-size: 10px; color: #718096; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+  .sigfallback { font-size: 9px; color: #a0aec0; font-style: italic; }
+  .sealcol { width: 110px; }
+  .sealimg { height: 74px; width: 74px; object-fit: contain; display: block; margin: 0 auto 4px; }
+  @media print { body { padding: 8px; } }
+</style></head><body><style>
+  .fee, .fee * { font-family: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", "FreeSans", sans-serif; font-variant-numeric: lining-nums tabular-nums; font-feature-settings: "lnum" 1, "tnum" 1; }
+  .fee h1 { font-size: 19px; } .fee h2 { font-size: 13px; }
+  .fee th, .fee td { font-size: 11px; vertical-align: top; }
+  .fee th { font-size: 9.5px; }
+  .fee .num { text-align: right; white-space: nowrap; }
+  .fee .sno { text-align: center; width: 28px; }
+  .fee .totals td { font-size: 11px; font-weight: bold; }
+  .fee .totals td:first-child { white-space: nowrap; }
+  .fee .kpi { font-size: 18px; font-weight: bold; margin-top: 4px; text-align: right; }
+  .fee .muted { font-size: 10px; }
+  .fee .foot { margin-top: 10px; font-size: 9.5px; color: #4a5568; line-height: 1.45; }
+  @page { size: A4 portrait; margin: 12mm; }
+</style><div class="fee"><div class="head"><div style="display:flex;gap:12px;align-items:center"><div><h1>Fees Demo School (TEST)</h1><h2>Monthly fee collection summary</h2></div></div><div style="text-align:right"><div class="badge">2026-10</div><div class="kpi">₹50,000.00</div><div class="muted">collected · 11 receipts</div></div></div>
+    <table><tr><th>Class</th><th class="num">Invoices</th><th class="num">Gross</th><th class="num">Concession</th><th class="num">Billed (net)</th><th class="num">Collected</th><th class="num">of which prev. dues</th><th class="num">Outstanding</th><th class="num">Collection %</th></tr>
+      <tr class=""><td>Grade 4</td><td class="num">2</td><td class="num">₹8,000.00</td><td class="num">₹0.00</td><td class="num">₹8,000.00</td><td class="num">₹13,000.00</td><td class="num">₹9,000.00</td><td class="num">₹4,000.00</td><td class="num">50.0%</td></tr><tr class=""><td>Grade 8</td><td class="num">5</td><td class="num">₹30,000.00</td><td class="num">₹1,500.00</td><td class="num">₹28,500.00</td><td class="num">₹37,000.00</td><td class="num">₹31,000.00</td><td class="num">₹22,500.00</td><td class="num">21.1%</td></tr>
+      <tr class="totals"><td>Grand total</td><td class="num">7</td><td class="num">₹38,000.00</td><td class="num">₹1,500.00</td><td class="num">₹36,500.00</td><td class="num">₹50,000.00</td><td class="num">₹40,000.00</td><td class="num">₹26,500.00</td><td class="num">27.4%</td></tr></table>
+    <table style="width:45%;margin-top:14px"><tr><th>Payment method</th><th class="num">Receipts</th><th class="num">Total</th></tr><tr><td>CASH</td><td class="num">5</td><td class="num">₹21,500.00</td></tr><tr><td>UPI</td><td class="num">4</td><td class="num">₹16,500.00</td></tr><tr><td>BANK</td><td class="num">1</td><td class="num">₹6,000.00</td></tr><tr><td>CHEQUE</td><td class="num">1</td><td class="num">₹6,000.00</td></tr></table>
+    <p class="foot">Billed = invoices due this month, net of concessions/waivers (shown separately, excluded from dues). Collected = all receipts dated this month (equals the sum of daily Day Books; reversed receipts excluded); "of which prev. dues" = the part received against invoices due before this month, including carried-forward Previous dues. Outstanding and Collection % = this month's billing only.</p>
+    <div class="sig"><span>Accountant</span><span>Principal</span></div></div></body></html>

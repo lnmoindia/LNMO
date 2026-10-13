@@ -225,45 +225,90 @@ export function printParentSlips(slips, setupUrl, logoSrc, title = "Parent invit
   openPrintWindow(title, SLIP_STYLES + pages.join(""));
 }
 
+// Fee documents: one sans font with lining + tabular figures so every amount has identical digit height/width.
+const FEE_STYLES = `<style>
+  .fee, .fee * { font-family: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", "FreeSans", sans-serif; font-variant-numeric: lining-nums tabular-nums; font-feature-settings: "lnum" 1, "tnum" 1; }
+  .fee h1 { font-size: 19px; } .fee h2 { font-size: 13px; }
+  .fee th, .fee td { font-size: 11px; vertical-align: top; }
+  .fee th { font-size: 9.5px; }
+  .fee .num { text-align: right; white-space: nowrap; }
+  .fee .sno { text-align: center; width: 28px; }
+  .fee .totals td { font-size: 11px; font-weight: bold; }
+  .fee .totals td:first-child { white-space: nowrap; }
+  .fee .kpi { font-size: 18px; font-weight: bold; margin-top: 4px; text-align: right; }
+  .fee .muted { font-size: 10px; }
+  .fee .foot { margin-top: 10px; font-size: 9.5px; color: #4a5568; line-height: 1.45; }
+  @page { size: A4 portrait; margin: 12mm; }
+</style>`;
+const inr = (n) => {
+  const v = Number(n || 0);
+  return `${v < 0 ? "−" : ""}₹${Math.abs(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+const pct1 = (v) => (v === null || v === undefined ? "—" : `${Number(v).toFixed(1)}%`);
+const cnt = (n) => Number(n || 0).toLocaleString("en-IN");
+const feeDoc = (title, body) => openPrintWindow(title, `${FEE_STYLES}<div class="fee">${body}</div>`);
+const feeHead = (school, title, right, logoPx = 46) => {
+  const logo = school?.logo_src ? `<img src="${esc(school.logo_src)}" alt="" style="height:${logoPx}px;width:${logoPx}px;object-fit:contain" />` : "";
+  return `<div class="head"><div style="display:flex;gap:12px;align-items:center">${logo}<div><h1>${esc(school?.name || "")}</h1><h2>${title}</h2></div></div><div style="text-align:right">${right}</div></div>`;
+};
+
 export function printFeeReceipt({ payment: p, invoice: inv, school, admission_no }) {
-  const money = (n) => `₹${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const logo = school.logo_src ? `<img src="${esc(school.logo_src)}" alt="" style="height:54px;width:54px;object-fit:contain" />` : "";
-  const items = (inv.items || []).map((i) => `<tr><td>${esc(i.title)}</td><td style="text-align:right">${money(i.amount)}</td></tr>`).join("");
+  const items = (inv.items || []).map((i) => `<tr><td>${esc(i.title)}</td><td class="num">${inr(i.amount)}</td></tr>`).join("");
   const extra = [
-    inv.discount_amount ? `<tr><td>Discount</td><td style="text-align:right">− ${money(inv.discount_amount)}</td></tr>` : "",
-    inv.fine_amount ? `<tr><td>Late fee</td><td style="text-align:right">${money(inv.fine_amount)}</td></tr>` : "",
+    inv.discount_amount ? `<tr><td>Concession / discount</td><td class="num">${inr(-inv.discount_amount)}</td></tr>` : "",
+    inv.fine_amount ? `<tr><td>Late fee</td><td class="num">${inr(inv.fine_amount)}</td></tr>` : "",
   ].join("");
   const stamp = p.reversed ? `<div style="position:fixed;top:40%;left:12%;font-size:72px;color:rgba(220,38,38,.18);transform:rotate(-20deg);font-weight:bold">REVERSED</div>` : "";
   const body = `${stamp}
-    <div class="head"><div style="display:flex;gap:12px;align-items:center">${logo}<div><h1>${esc(school.name)}</h1>
-      <h2>${esc(school.address || "")}</h2></div></div>
-      <div style="text-align:right"><div style="font-size:16px;font-weight:bold;letter-spacing:.08em">FEE RECEIPT</div>
-      <div class="badge">No. <b>${esc(p.receipt_no)}</b></div><div class="muted">${esc((p.collected_at || "").slice(0, 10))}</div></div></div>
+    ${feeHead(school, esc(school.address || ""), `<div style="font-size:16px;font-weight:bold;letter-spacing:.08em">FEE RECEIPT</div>
+      <div class="badge">No. <b>${esc(p.receipt_no)}</b></div><div class="muted">${esc((p.collected_at || "").slice(0, 10))}</div>`, 54)}
     <table style="margin-top:14px"><tr><th>Student</th><td>${esc(p.student_name)}</td><th>Admission no.</th><td>${esc(admission_no || "—")}</td></tr>
       <tr><th>Class</th><td>${esc(p.class_name || "")}${p.section ? ` ${esc(p.section)}` : ""}</td><th>Period</th><td>${esc(p.period_label || "")}${p.academic_year && !(p.period_label || "").includes(p.academic_year) ? ` · ${esc(p.academic_year)}` : ""}</td></tr></table>
-    <table><tr><th>Fee head</th><th style="text-align:right">Amount</th></tr>${items}${extra}
-      <tr class="totals"><td>Invoice total</td><td style="text-align:right">${money(inv.amount_due)}</td></tr>
-      <tr class="totals"><td>Received now (${esc(p.method.toUpperCase())}${p.reference ? ` · ${esc(p.reference)}` : ""})</td><td style="text-align:right">${money(p.amount)}</td></tr>
-      <tr><td>Balance remaining on this invoice</td><td style="text-align:right">${money(inv.balance)}</td></tr></table>
-    ${p.reversed ? `<p style="color:#b91c1c;margin-top:8px;font-size:12px">Reversed ${esc((p.reversed_at || "").slice(0, 10))} · credit note ${esc(p.credit_note_no)} · ${esc(p.reverse_reason)}</p>` : ""}
+    <table><tr><th>Fee head</th><th class="num">Amount</th></tr>${items}${extra}
+      <tr class="totals"><td>Invoice total</td><td class="num">${inr(inv.amount_due)}</td></tr>
+      <tr class="totals"><td>Received now (${esc(p.method.toUpperCase())}${p.reference ? ` · ${esc(p.reference)}` : ""})</td><td class="num">${inr(p.amount)}</td></tr>
+      <tr><td>Balance remaining on this invoice</td><td class="num">${inr(inv.balance)}</td></tr></table>
+    ${p.reversed ? `<p style="color:#b91c1c;margin-top:8px;font-size:11px">Reversed ${esc((p.reversed_at || "").slice(0, 10))} · credit note ${esc(p.credit_note_no)} · ${esc(p.reverse_reason)}</p>` : ""}
     ${p.note ? `<p class="muted" style="margin-top:8px">Note: ${esc(p.note)}</p>` : ""}
     <div class="sig"><span>Collected by: ${esc(p.collected_by || "")}</span><span>Authorised signatory</span></div>
     <p class="muted" style="margin-top:18px">This is a system-generated receipt.</p>`;
-  openPrintWindow(`Receipt ${p.receipt_no}`, body);
+  feeDoc(`Receipt ${p.receipt_no}`, body);
 }
 
 export function printDayBook(d) {
-  const money = (n) => `₹${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const logo = d.school.logo_src ? `<img src="${esc(d.school.logo_src)}" alt="" style="height:46px;width:46px;object-fit:contain" />` : "";
-  const grp = (title, rows) => `<table style="width:32%;display:inline-table;margin-right:1%;vertical-align:top"><tr><th>${title}</th><th style="text-align:right">Count</th><th style="text-align:right">Total</th></tr>
-    ${rows.map((r) => `<tr><td>${esc(String(r.key).toUpperCase() === r.key ? r.key : r.key)}</td><td style="text-align:right">${r.count}</td><td style="text-align:right">${money(r.total)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">None</td></tr>`}</table>`;
-  const pays = d.payments.map((p) => `<tr><td>${esc(p.receipt_no)}</td><td>${esc((p.collected_at || "").slice(11, 16))}</td><td>${esc(p.student_name)}</td><td>${esc(p.class_name || "")} ${esc(p.section || "")}</td><td>${esc(p.period_label || "")}</td><td>${esc(p.method.toUpperCase())}${p.reference ? ` · ${esc(p.reference)}` : ""}</td><td>${esc(p.collected_by || "")}</td><td style="text-align:right">${money(p.amount)}</td></tr>`).join("");
-  const rev = d.reversed.length ? `<p class="muted" style="margin-top:10px">Excluded — reversed: ${d.reversed.map((p) => `${esc(p.receipt_no)} (${money(p.amount)})`).join(", ")}</p>` : "";
-  const body = `<div class="head"><div style="display:flex;gap:12px;align-items:center">${logo}<div><h1>${esc(d.school.name)}</h1><h2>Daily collection report (day book)</h2></div></div>
-      <div style="text-align:right"><div class="badge">${esc(d.date)}</div><div style="font-size:18px;font-weight:bold;margin-top:4px">${money(d.summary.total)}</div><div class="muted">${d.summary.count} receipts</div></div></div>
-    <div style="margin-top:12px">${grp("Method", d.by_method)}${grp("Collector", d.by_collector)}${grp("Class", d.by_class)}</div>
-    <table><tr><th>Receipt</th><th>Time (UTC)</th><th>Student</th><th>Class</th><th>Period</th><th>Method</th><th>Collector</th><th style="text-align:right">Amount</th></tr>${pays || `<tr><td colspan="8" class="muted">No collections on this date.</td></tr>`}
-      <tr class="totals"><td colspan="7">Total collected</td><td style="text-align:right">${money(d.summary.total)}</td></tr></table>${rev}
+  const grp = (title, rows, upper = false) => `<table style="width:32%;display:inline-table;margin-right:1%;vertical-align:top"><tr><th>${title}</th><th class="num">Count</th><th class="num">Total</th></tr>
+    ${rows.map((r) => `<tr><td>${esc(upper ? String(r.key).toUpperCase() : r.key)}</td><td class="num">${cnt(r.count)}</td><td class="num">${inr(r.total)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">None</td></tr>`}</table>`;
+  const pays = d.payments.map((p, i) => `<tr><td class="sno">${i + 1}</td><td>${esc(p.receipt_no)}</td><td>${esc((p.collected_at || "").slice(11, 16))}</td><td>${esc(p.student_name)}</td><td>${esc(p.class_name || "")} ${esc(p.section || "")}</td><td>${esc(p.period_label || "")}</td><td>${esc(p.method.toUpperCase())}${p.reference ? ` · ${esc(p.reference)}` : ""}</td><td>${esc(p.collected_by || "")}</td><td class="num">${inr(p.amount)}</td></tr>`).join("");
+  const rev = d.reversed.length ? `<p class="foot">Excluded — reversed: ${d.reversed.map((p) => `${esc(p.receipt_no)} (${inr(p.amount)})`).join(", ")}</p>` : "";
+  const body = `${feeHead(d.school, "Daily collection report (day book)", `<div class="badge">${esc(d.date)}</div><div class="kpi">${inr(d.summary.total)}</div><div class="muted">${cnt(d.summary.count)} receipts</div>`)}
+    <div style="margin-top:12px">${grp("Method", d.by_method, true)}${grp("Collector", d.by_collector)}${grp("Class", d.by_class)}</div>
+    <table><tr><th class="sno">S.No</th><th>Receipt</th><th>Time (UTC)</th><th>Student</th><th>Class</th><th>Period</th><th>Method</th><th>Collector</th><th class="num">Amount</th></tr>${pays || `<tr><td colspan="9" class="muted">No collections on this date.</td></tr>`}
+      <tr class="totals"><td colspan="8">Total collected</td><td class="num">${inr(d.summary.total)}</td></tr></table>${rev}
     <div class="sig"><span>Prepared by</span><span>Verified by (Principal / Accountant)</span></div>`;
-  openPrintWindow(`Day book ${d.date}`, body);
+  feeDoc(`Day book ${d.date}`, body);
+}
+
+export function printDefaulters(d, filterLabel) {
+  const rows = d.rows.map((r, i) => `<tr><td class="sno">${i + 1}</td><td><strong>${esc(r.student_name)}</strong><br/><span class="muted">${esc(r.admission_no || "")}</span></td><td>${esc(r.class_name || "")} ${esc(r.section || "")}</td><td>${esc(r.parent_name || "")}<br/><span class="muted">${esc(r.parent_phone || "—")}</span></td><td>${esc(r.oldest_due_date)}</td><td class="num">${cnt(r.days_late)}</td><td class="num">${inr(r.overdue_amount)}</td><td class="num">${inr(r.total_outstanding)}</td><td>${esc((r.last_reminder_at || "").slice(0, 10) || "—")}</td></tr>`).join("");
+  const body = `${feeHead(d.school, "Fee defaulters list", `<div class="badge">As of ${esc(d.as_of)}</div><div class="kpi">${inr(d.totals.overdue)}</div><div class="muted">${cnt(d.totals.students)} students overdue</div>`)}
+    <p class="muted" style="margin-top:6px">${esc(filterLabel || "All classes")} · Ageing: 1-30 days ${cnt(d.buckets["1-30"])} · 31-60 days ${cnt(d.buckets["31-60"])} · 60+ days ${cnt(d.buckets["60+"])}</p>
+    <table><tr><th class="sno">S.No</th><th>Student</th><th>Class</th><th>Parent / phone</th><th>Oldest due</th><th class="num">Days late</th><th class="num">Overdue</th><th class="num">Outstanding</th><th>Last reminder</th></tr>
+      ${rows || `<tr><td colspan="9" class="muted">No defaulters for these filters.</td></tr>`}
+      <tr class="totals"><td colspan="6">Total (${cnt(d.totals.students)} students)</td><td class="num">${inr(d.totals.overdue)}</td><td class="num">${inr(d.totals.outstanding)}</td><td></td></tr></table>
+    <p class="foot">Overdue = remaining balance of invoices past their due date (partly paid invoices count only what is left; concessions/waivers excluded). Outstanding = all unpaid balances, including invoices not yet due.</p>
+    <div class="sig"><span>Prepared by</span><span>Verified by (Principal / Accountant)</span></div>`;
+  feeDoc(`Fee defaulters ${d.as_of}`, body);
+}
+
+export function printMonthlySummary(d) {
+  const tr = (r, cls = "") => `<tr class="${cls}"><td>${esc(r.class_name || "Total")}</td><td class="num">${cnt(r.invoices)}</td><td class="num">${inr(r.gross)}</td><td class="num">${inr(r.concession)}</td><td class="num">${inr(r.billed)}</td><td class="num">${inr(r.collected)}</td><td class="num">${inr(r.prev_dues_collected)}</td><td class="num">${inr(r.outstanding)}</td><td class="num">${pct1(r.collection_pct)}</td></tr>`;
+  const methods = d.by_method.map((m) => `<tr><td>${esc(m.key.toUpperCase())}</td><td class="num">${cnt(m.count)}</td><td class="num">${inr(m.total)}</td></tr>`).join("");
+  const body = `${feeHead(d.school, "Monthly fee collection summary", `<div class="badge">${esc(d.month)}</div><div class="kpi">${inr(d.totals.collected)}</div><div class="muted">collected · ${cnt(d.totals.receipts)} receipts</div>`)}
+    <table><tr><th>Class</th><th class="num">Invoices</th><th class="num">Gross</th><th class="num">Concession</th><th class="num">Billed (net)</th><th class="num">Collected</th><th class="num">of which prev. dues</th><th class="num">Outstanding</th><th class="num">Collection %</th></tr>
+      ${d.rows.map((r) => tr(r)).join("") || `<tr><td colspan="9" class="muted">No billing or collections this month.</td></tr>`}
+      ${tr({ ...d.totals, class_name: "Grand total" }, "totals")}</table>
+    <table style="width:45%;margin-top:14px"><tr><th>Payment method</th><th class="num">Receipts</th><th class="num">Total</th></tr>${methods || `<tr><td colspan="3" class="muted">None</td></tr>`}</table>
+    <p class="foot">Billed = invoices due this month, net of concessions/waivers (shown separately, excluded from dues). Collected = all receipts dated this month (equals the sum of daily Day Books; reversed receipts excluded${d.reversed.count ? `: ${cnt(d.reversed.count)} · ${inr(d.reversed.amount)}` : ""}); "of which prev. dues" = the part received against invoices due before this month, including carried-forward Previous dues. Outstanding and Collection % = this month's billing only.${d.totals.carried_forward ? ` Carried forward to next year: ${inr(d.totals.carried_forward)}.` : ""}</p>
+    <div class="sig"><span>Accountant</span><span>Principal</span></div>`;
+  feeDoc(`Monthly fee summary ${d.month}`, body);
 }

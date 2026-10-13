@@ -1,0 +1,10 @@
+import fs from "fs";
+const [, , modPath, tag] = process.argv;
+let current = null;
+globalThis.window = { open: () => ({ document: { write: (h) => fs.writeFileSync(`${current}_${tag}.html`, h), close() {} }, focus() {}, print() {} }) };
+globalThis.setTimeout = () => 0;
+const m = await import(modPath);
+const J = (f) => JSON.parse(fs.readFileSync(f, "utf8"));
+current = "defaulters"; m.printDefaulters(J("def.json"), "All classes");
+current = "monthly"; m.printMonthlySummary(J("mon.json"));
+current = "daybook"; m.printDayBook(J("day.json"));
