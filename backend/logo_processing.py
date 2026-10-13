@@ -143,6 +143,9 @@ def _magenta(rgb):
 def process_logo(src: bytes) -> dict:
     """Return {filename: bytes} for the full logo, mark-only and icon sets."""
     rgb = _to_rgba(src)
+    h0, w0 = rgb.shape[:2]
+    if max(h0, w0) < 2600:  # 2x supersampled master → smoother edges once downscaled
+        rgb = np.asarray(Image.fromarray(rgb.astype(np.uint8)).resize((w0 * 2, h0 * 2), Image.LANCZOS)).astype(np.float32)
     core, alpha, fg = _matte(rgb)
     split = _split_rows(core)
     filled = core.copy()
@@ -151,7 +154,8 @@ def process_logo(src: bytes) -> dict:
         m = slice(top, mark_bot + 1)
         filled[m] = ndimage.binary_fill_holes(core[m])  # protect enclosed eye white + pupil highlight
     a = np.where(filled & ~core, 1.0, alpha)
-    col = np.where((filled & ~core)[..., None], rgb, np.where(core[..., None], rgb, fg))
+    a = ndimage.gaussian_filter(a, 0.9)  # soften stair-steps on the outer edge
+    col = np.where(filled[..., None], rgb, fg)
     rgba = np.dstack([col, a * 255]).clip(0, 255).astype(np.uint8)
     full_img = Image.fromarray(rgba, "RGBA")
     full = _crop(full_img)
