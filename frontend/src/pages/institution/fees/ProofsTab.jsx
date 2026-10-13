@@ -108,7 +108,7 @@ export default function ProofsTab({ onCounts }) {
       <div className="flex flex-wrap gap-2 items-center">
         <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 p-0.5">
           {[["proofs", "Payment proofs"], ["issues", "Issues"]].map(([k, l]) => (
-            <button key={k} onClick={() => { setKind(k); setStatus("pending"); }} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${kind === k ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900" : "text-slate-600 dark:text-slate-300"}`} data-testid={`proofs-kind-${k}`}>{l}</button>
+            <button key={k} onClick={() => { if (k !== kind) { setRows(null); setKind(k); setStatus("pending"); } }} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${kind === k ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900" : "text-slate-600 dark:text-slate-300"}`} data-testid={`proofs-kind-${k}`}>{l}</button>
           ))}
         </div>
         <select className={sel} value={status} onChange={(e) => setStatus(e.target.value)} data-testid="proofs-status-filter">{statuses.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
@@ -116,8 +116,8 @@ export default function ProofsTab({ onCounts }) {
       </div>
       {rows === null && <div className="h-24 rounded-xl bg-slate-100 dark:bg-slate-800 animate-pulse" />}
       {rows?.length === 0 && <p className="text-sm text-slate-400 py-8 text-center" data-testid="proofs-empty">Nothing here.</p>}
-      {kind === "proofs" && rows?.map((p) => <ProofCard key={p.id} p={p} onApprove={setApprove} onReject={(x) => { setReject(x); setReason(""); }} />)}
-      {kind === "issues" && rows?.map((i) => (
+      {kind === "proofs" && rows?.filter((p) => !p.messages).map((p) => <ProofCard key={p.id} p={p} onApprove={setApprove} onReject={(x) => { setReject(x); setReason(""); }} />)}
+      {kind === "issues" && rows?.filter((i) => Array.isArray(i.messages)).map((i) => (
         <div key={i.id} className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-2" data-testid={`issue-card-${i.id}`}>
           <div className="flex flex-wrap items-center gap-2 text-sm"><b>{i.student_name}</b><span className="text-xs text-slate-500">{i.class_name} {i.section} · {i.period_label} · raised by {i.raised_by_name}</span>
             <span className="ml-auto flex gap-2">

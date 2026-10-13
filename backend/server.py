@@ -4375,6 +4375,21 @@ async def get_own_institution_logo(user: dict = Depends(require_roles("instituti
                     headers={"Cache-Control": "private, max-age=60"})
 
 
+@api.get("/public/docs/LNMO_Product_Guide.pdf")
+async def public_product_guide():
+    """Unauthenticated download of the product guide ONLY (fixed path, no listing). Falls back to object storage."""
+    f = ROOT_DIR.parent / "docs" / "LNMO_Product_Guide.pdf"
+    if f.is_file():
+        data = f.read_bytes()
+    else:
+        try:
+            data, _ = _get_object("lnmo/docs/LNMO_Product_Guide.pdf")
+        except Exception:
+            raise HTTPException(status_code=404, detail="Not found")
+    return Response(content=data, media_type="application/pdf",
+                    headers={"Content-Disposition": 'inline; filename="LNMO_Product_Guide.pdf"', "Cache-Control": "public, max-age=600"})
+
+
 @api.get("/public/institution-logo")
 async def public_institution_logo(domain: str = "", slug: str = ""):
     q = None

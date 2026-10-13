@@ -688,3 +688,13 @@ User-confirmed rules: same-section default (8-A→9-A) with per-student override
   - Statement: GET /api/fees/students/{sid}/statement and statement.pdf (staff), and /api/parent/child/{sid}/fees/statement.pdf (parent). A4, ReportLab platypus, FreeSans.
   - Badges: proofs + issues count on the Fees sidebar item and the "Payment proofs" tab.
   - Backlog: show a HEIC preview (the browser can't render it; it opens as a file); add a timezone setting to the UI; a parent notification when the school replies; object-storage cleanup for rejected proofs (kept on purpose, no deletes).
+- Product Guide (2026-10-13): /app/docs/LNMO_Product_Guide.pdf (50 pages, ~6.3 MB, A4, clickable TOC, header/footer + page numbers).
+  - Built from about 65 Playwright screenshots of the demo school "Sunrise Public School (Demo)", which was created through the Platform Manager UI.
+  - Public download: GET /api/public/docs/LNMO_Product_Guide.pdf (that single file only, served from /app/docs with an object-storage fallback at lnmo/docs/).
+  - Bug fixed along the way: switching ProofsTab from Proofs to Issues crashed the tab (it rendered stale rows).
+
+- Product Guide v1.1 (2026-10-13): 54 pages, about 7.1 MB. Same file path and the same public URL.
+  - AI Tutor switched on for Sunrise only, using the real Platform → Features / AI toggle. Grade 8 Science curriculum went through the real flow: the teacher contributed it, the admin approved it and turned on AI for it. The guide shows a real Gemini answer to a student question.
+  - Filled screens: Plans, communication history (STUB), 3 support tickets, published results, attendance and homework. Also new shots of the student results view and the wizard in progress (on the throwaway "Sunrise Demo Setup" school).
+  - Fee structures: the v1 screenshot already listed both structures, so this was not a bug. The empty screen in v1 was Plans, which now has 3 plans.
+  - Privacy fixes: the library is filtered to platform content (v1 showed another school's name), and the real platform email is replaced on the login and dashboard shots.
