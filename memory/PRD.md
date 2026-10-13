@@ -698,3 +698,9 @@ User-confirmed rules: same-section default (8-A→9-A) with per-student override
   - Filled screens: Plans, communication history (STUB), 3 support tickets, published results, attendance and homework. Also new shots of the student results view and the wizard in progress (on the throwaway "Sunrise Demo Setup" school).
   - Fee structures: the v1 screenshot already listed both structures, so this was not a bug. The empty screen in v1 was Plans, which now has 3 plans.
   - Privacy fixes: the library is filtered to platform content (v1 showed another school's name), and the real platform email is replaced on the login and dashboard shots.
+- Product Guide v1.2 (2026-10-13): 77 pages, 9.6 MB. Same path, object-storage key and public URL.
+  - New section 6, "Class Hub — page by page": the 5 hub tabs, the 5 class-page tabs and the section page. Each has what it is, who uses it, a screenshot and use cases. Also covers how Class Hub links to the other modules.
+  - Section 7, Smart Timetable, rewritten from server.py and the frontend pages: concepts, generator rules, generate/review/publish, views, substitutions in depth (suggestion ranking, ask/accept, auto-cover, history, edge cases), 6 use cases, and FAQ.
+  - Demo data added through the real APIs (s7_fill.py): Arjun absent today with cover assigned, requested and open; Suresh absent yesterday, all covered; Rahul's leave request pending; class leaders, rooms, the Period-1 rule on 8A, 3 achievements. Screenshots taken by s8_capture.py.
+  - Gaps stated in the guide (not built): per-teacher period limits, unavailable slots, room allocation by the generator, partial-day absence, a Cancel-absence button in the UI, a substitution report or export, and substitutions shown in the student/parent portals.
+

@@ -24,6 +24,8 @@ def img(name):
     return dst
 
 
+from chapters_v12 import TT, CH  # noqa: E402
+
 S = [  # id, title, who, purpose, steps, shots[(name, caption)], tips
  ("pm", "Platform Manager: onboard a new school", "LNMO Platform Manager",
   "Create and manage schools (tenants), plans, messaging credits and support from one console. Each school's data is completely isolated.",
@@ -58,14 +60,8 @@ S = [  # id, title, who, purpose, steps, shots[(name, caption)], tips
    "Track pending/accepted invites and send reminders from the same screen."],
   [("po_01_invites", "Students page with parent invite tools")],
   ["In this demo, SMS/WhatsApp run in STUB (demo) mode: messages are logged in history, not delivered."]),
- ("tt", "Smart Timetable", "Admin / Principal",
-  "Generate a clash-free weekly timetable from subject requirements, then publish it to teachers, students and parents.",
-  ["Timetable → configuration: working days, periods and breaks (per year, optionally per division).",
-   "Class Hub → set periods per week and the teacher for each subject/section.",
-   "Generate for a class: the solver places every period without teacher or class clashes and reports anything it could not place.",
-   "Review the draft grid, drag to adjust, then Publish. Use Substitutions for day-to-day absences."],
-  [("tt_01_timetable", "Generated class timetable"), ("tt_02_substitutions", "Substitutions — empty because no teacher is marked absent today"), ("rt_03_timetable", "A teacher's personal timetable")],
-  ["Re-generate any time before publishing; published timetables are versioned."]),
+ CH,
+ TT,
  ("ex", "Exams, assessments and report cards", "Admin / Principal / Teacher",
   "Plan an exam timetable per division, collect marks from subject teachers and publish results and report cards.",
   ["Exams → New exam: name, type and a date window plus time slots for each division.",
@@ -151,8 +147,42 @@ FAQ = [("How do I collect cash?", "Fees → Accounts → open the student's Ledg
        ("Is data ever deleted?", "Operational records are never hard-deleted: they are deactivated, reversed or rolled back with an audit trail.")]
 
 
+def fig(name, cap):
+    p = img(name)
+    if not p:
+        return ""
+    narrow = ' style="width:62%"' if name == "pm_04_create_form" else ""
+    return f'<figure><img src="file://{p}"{narrow}/><figcaption>{E(cap)}</figcaption></figure>'
+
+
+def block(b):
+    k = b[0]
+    if k in ("h2", "h3", "p"):
+        return f"<{k}>{E(b[1])}</{k}>"
+    if k == "ul":
+        return "<ul>" + "".join(f"<li>{E(x)}</li>" for x in b[1]) + "</ul>"
+    if k == "ol":
+        return f'<ol start="{b[2] if len(b) > 2 else 1}">' + "".join(f"<li>{E(x)}</li>" for x in b[1]) + "</ol>"
+    if k == "dl":
+        return '<div class="dl">' + "".join(f"<p><b>{E(t)}.</b> {E(d)}</p>" for t, d in b[1]) + "</div>"
+    if k == "note":
+        return f'<div class="tip">{E(b[1])}</div>'
+    if k == "fig":
+        return fig(b[1], b[2])
+    if k == "faq":
+        return "".join(f"<div class='faq'><b>{E(q)}</b><p>{E(a)}</p></div>" for q, a in b[1])
+    if k == "tab":
+        _, name, shotn, what, uses = b
+        return (f'<div class="tabcard"><h3>{E(name)}</h3><p>{E(what)}</p><p class="uc"><b>Use cases:</b> '
+                + " · ".join(E(u) for u in uses) + "</p></div>" + fig(shotn, f"Class Hub → {name}"))
+    return ""
+
+
 def section_html(i, s):
-    sid, title, who, purpose, steps, shots, tips = s
+    sid, title, who, purpose, steps, shots, tips = s[:7]
+    if len(s) > 7:
+        return f"""<section id="{sid}" class="chap"><div class="kicker">Section {i}</div><h1>{E(title)}</h1>
+      <div class="meta"><span><b>Who:</b> {E(who)}</span></div><p class="lead">{E(purpose)}</p>{''.join(block(b) for b in s[7])}</section>"""
     figs = []
     for name, cap in shots:
         p = img(name)
@@ -195,6 +225,8 @@ def build_html():
     figure img {{ width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; box-shadow: 0 1px 3px rgba(15,23,42,.12); }}
     figcaption {{ font-size: 8.5pt; color: #64748b; margin-top: 1.5mm; }} figcaption::before {{ content: "▲ "; color: #4f46e5; }}
     .tip {{ background: #ecfdf5; border-left: 4px solid #10b981; padding: 3mm 5mm; border-radius: 4px; font-size: 9.5pt; page-break-inside: avoid; }}
+    .dl p {{ margin: 1.6mm 0; }} .tabcard {{ border-left: 3px solid #4f46e5; padding: 1mm 0 1mm 4mm; margin-top: 5mm; page-break-inside: avoid; }}
+    .tabcard h3 {{ margin: 0 0 1mm; }} .tabcard p {{ margin: 1mm 0; }} .uc {{ font-size: 9.5pt; color: #475569; }} h2 {{ page-break-after: avoid; }}
     .tip ul {{ margin: 1mm 0 0; padding-left: 5mm; }}
     .toc ol {{ list-style: none; padding: 0; }} .toc li a {{ display: block; padding: 2.2mm 0; border-bottom: 1px dotted #cbd5e1; color: #1e293b; text-decoration: none; font-size: 11pt; }}
     .roles {{ display: flex; align-items: stretch; gap: 2mm; margin: 4mm 0; }} .role {{ flex: 1; background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px; padding: 3mm 2mm; text-align: center; font-size: 9pt; }}
@@ -206,7 +238,7 @@ def build_html():
     .hl {{ display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; }} .hl div {{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 3mm; font-size: 9.5pt; }}
     </style></head><body>
     <div class="cover"><div class="logo">L</div><h1>LNMO School ERP —<br/>Product Guide</h1><div class="sub">Every role, every module, step by step — with real screens</div><div class="accent"></div>
-      <div class="band"><span>Version 1.1 · October 2026</span><span>Demo school: Sunrise Public School (Demo)</span></div></div>
+      <div class="band"><span>Version 1.2 · October 2026</span><span>Demo school: Sunrise Public School (Demo)</span></div></div>
     <section class="toc"><div class="kicker">Contents</div><h1>Table of contents</h1><ol>
       <li><a href="#overview"><span>1. Product overview</span></a></li><li><a href="#security"><span>2. Multi-school isolation & security</span></a></li>{toc}
       <li><a href="#appendix"><span>{len(S) + 3}. Appendix: permissions, glossary, FAQ</span></a></li></ol>
@@ -237,7 +269,7 @@ async def main():
         pg = await b.new_page()
         await pg.goto("file:///app/docs/build/guide.html")
         await pg.wait_for_timeout(1500)
-        foot = '<div style="font-size:7.5px;color:#64748b;width:100%;padding:0 14mm;display:flex;justify-content:space-between;font-family:Arial"><span>LNMO School ERP — Product Guide · v1.1 · Oct 2026</span><span>Page <span class="pageNumber"></span> / <span class="totalPages"></span></span></div>'
+        foot = '<div style="font-size:7.5px;color:#64748b;width:100%;padding:0 14mm;display:flex;justify-content:space-between;font-family:Arial"><span>LNMO School ERP — Product Guide · v1.2 · Oct 2026</span><span>Page <span class="pageNumber"></span> / <span class="totalPages"></span></span></div>'
         head = '<div style="font-size:7.5px;color:#4f46e5;width:100%;padding:0 14mm;font-family:Arial;font-weight:bold;letter-spacing:.1em">LNMO</div>'
         await pg.pdf(path=str(OUT), format="A4", print_background=True, display_header_footer=True, header_template=head, footer_template=foot,
                      margin={"top": "18mm", "bottom": "16mm", "left": "14mm", "right": "14mm"})
