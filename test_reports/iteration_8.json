@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 8 (Subjects Architecture Upgrade) tested end-to-end. Backend: new pytest suite /app/backend/tests/test_iteration8.py (23 tests, 22 pass) covering subject catalog CRUD + lookup, single theory/practical offering marks derivation, duplicate/bad-class/missing-subject validation, POST /api/subject-offerings/bulk (create, dedupe 'Already offered', 'Class not found', payload validation, anon/teacher authz) and Class-Hub regression lists. Frontend: Playwright flows for /app/subjects catalog CRUD, Class Hub Subject Offerings tab (theory 100 + practical 70+30=100 rendering), class-chip scoping (Class field hidden, list scoped), the 3-step bulk-offer dialog (unit preselect 4/4 -> deselect -> subject+practical marks 60/40 -> review -> apply 3 created -> rerun shows 3 'Already offered' skips + 1 created), offering row delete, data persistence after reload, and Classes/Sections/Enrollments/Teacher-Assignments tabs. Auth playbook spot-checks done. All test/seed data cleaned up (Greenwood back to 1 class 'Grade 6', 1 subject 'Mathematics', 0 offerings).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/res/subject_offerings/{id}", "issue": "normalize_offering_marks() is not re-run on update (enrich_institution_doc is only called for enrollments/teacher_assignments/classes at server.py:372). Editing an offering to has_practical=true with theory=60/practical=50 persists a stale max_marks=100 instead of 110, so derived total desynchronises from theory+practical. Reproduced by test_update_offering_to_practical_renormalizes. Also no duplicate check on update."},
+      {"endpoint": "CORS config (server.py:1253)", "issue": "allow_origins defaults to '*' with allow_credentials=True; CORS_ORIGINS exists in backend/.env — prefer explicit origins only (playbook requirement)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "SubjectsPage (config.js subjectsConfig)", "issue": "Type column renders the raw stored slug. Subjects created from the UI store type='practical'/'core' (option values) so the list shows lowercase 'practical' instead of the label 'Practical / Lab' (API/label-created rows show 'Practical / Lab'), i.e. inconsistent display for the same concept. Add a value->label render mapping (and normalise legacy/empty values, seeded 'Mathematics' shows '—').", "selector": "table column 'TYPE' on /app/subjects", "priority": "MEDIUM"},
+      {"component": "ClassHub offerings add form (InlineList)", "issue": "'Theory max (if practical)' and 'Practical max (if practical)' inputs are always visible even when 'Has practical / lab' = No, and 'Max marks' stays visible when it is Yes — misleading (the bulk dialog correctly toggles between them).", "selector": "[data-testid=\"inline-field-theory_max_marks\"]", "priority": "LOW"},
+      {"component": "InlineList row delete (offerings/sections/etc.)", "issue": "Trash icon deletes immediately with no confirmation dialog — destructive action without confirm.", "selector": "[data-testid=\"hub-offerings-delete\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Bulk-offer dialog step 2", "issues": ["Marks fields do not prefill from the picked subject's catalog default_max_marks (default stays 100/70/30), so the new catalog field has no effect on the offering flow", "Section is a free-text input here but a Select (lookup/sections) in the single-add form — inconsistent, and a typo creates an offering for a non-existent section"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration8.py",
+    "/app/backend/tests/seed_bulk_offer_qa.py",
+    "/app/test_reports/pytest/iteration8.xml"
+  ],
+  "action_items": [
+    "Re-run normalize_offering_marks() (and the duplicate check) on PUT /api/res/subject_offerings/{id} so edited offerings recompute max_marks",
+    "Render subject 'type' via a value->label map on /app/subjects (and decide on one canonical stored value: slug vs label)",
+    "Conditionally show Max marks vs Theory/Practical inputs in the Class Hub offerings add form based on 'Has practical'",
+    "Optional: prefill bulk-offer marks from subject.default_max_marks; make bulk 'Section' a Select; set explicit CORS_ORIGINS"
+  ],
+  "critical_code_review_comments": [
+    "server.py update_resource(): resource whitelist for enrich (line 372) omits subject_offerings — any derived-field logic silently stops applying on edit; consider always calling enrich for institution-scoped resources.",
+    "POST /api/subject-offerings/bulk loops with per-class awaits (find_one + insert_one); fine at current scale but use one $in existence query + insert_many for large units.",
+    "Subject 'type' has two competing representations (slug in frontend config options, free string accepted by backend) — validate with a Pydantic enum."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration8.py",
+    "/app/backend/tests/seed_bulk_offer_qa.py"
+  ],
+  "success_rate": {"backend": "96% (22/23)", "frontend": "95% (all requested flows pass; 3 cosmetic/UX bugs)"},
+  "seed_data_creation": "Temporarily created classes 'QA Grade 7/8/9', subject 'QA Chemistry' (+ QA Biology via UI) and several offerings — all deleted afterwards; Greenwood restored to 1 class 'Grade 6', 1 subject 'Mathematics', 0 offerings.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@greenwood.edu / Green@2026! (institution admin). Note: brute-force lockout verified working (5 fails -> 429 for 15 min) on throwaway emails only.",
+  "context_for_next_testing_agent": "test_iteration8.py is the regression suite for subjects/offerings/bulk-offer; the only failing test (test_update_offering_to_practical_renormalizes) is a genuine backend defect, keep it. seed_bulk_offer_qa.py creates/cleans (arg 'clean') QA classes + QA Chemistry needed for bulk-offer UI tests. UI testids verified: hub-tab-offerings, inline-field-<name>, inline-has_practical-toggle, hub-offerings-add-btn, hub-offerings-delete, open-bulk-offer, bulk-offer-*; subject dialog uses field-<name> + form-submit-btn (NOT crud-form-submit).",
+  "rca_of_the_issue": "Derived-marks desync on edit: create path goes through enrich_institution_doc -> normalize_offering_marks, but update_resource only calls enrich for enrollments/teacher_assignments/classes, so PUT persists the raw payload and leaves max_marks stale. Subject type display bug: frontend option values are slugs ('practical') while the table renders row.type verbatim, and rows created outside the form store the label, producing mixed casing/format in the Type column."
+}

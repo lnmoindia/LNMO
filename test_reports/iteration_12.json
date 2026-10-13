@@ -1,0 +1,39 @@
+{
+  "summary": "Full test of Timetable module (Phases 1-4) + Notices + Report Cards on LNMO ERP. Backend: new pytest suite /app/backend/tests/test_iteration12.py — 43/43 passing (timetable config CRUD/upsert/unit-override, grid, complete conflict engine matrix, teacher-grid, portal timetable, notices audience filtering, report card incl. draft-exclusion, RBAC and regression). Frontend: verified admin Timetable Setup/Builder/By-teacher tabs, EntryDialog create/edit/clear, print popup, Notices CRUD UI, teacher My Timetable + dashboard notices/quick action, student portal timetable + notices, and the Class Hub report-card print popup. No functional defects found; all created test data cleaned up (verified in Mongo).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/timetable/teacher-grid", "issue": "Always resolves the institution-default config (effective_tt_config(iid, ay, None)); per-academic-unit period overrides are ignored, so a teacher teaching a class in a unit with an override sees wrong period labels/times in 'My Timetable' and in the admin By-teacher matrix."},
+      {"endpoint": "GET /api/students/{id}/report-card", "issue": "Any teacher of the institution can fetch any student's report card (no assignment/class scoping). Consider restricting to the teacher's assigned classes."},
+      {"endpoint": "GET /api/students/{id}/report-card", "issue": "Attendance % is computed by scanning every attendance sheet of the class in Python (per-sheet dict lookup); will not scale — better to query only sheets containing the student / aggregate in Mongo."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin Timetable → Setup", "issues": ["tt-config-badge briefly renders 'Built-in defaults (not saved yet)' before the config fetch resolves, i.e. a wrong state flash instead of a loading placeholder"]},
+      {"screen": "Notices → New Notice dialog", "issues": ["Audience and Status selects start empty ('Select audience'/'Select status') although the backend defaults them to Everyone/Published — pre-select the defaults so the saved value is explicit"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration12.py", "/app/test_reports/pytest/iter12.xml", "/app/backend/tests/portal_user_iter12.py", "/app/backend/tests/verify_clean_iter12.py"],
+  "action_items": [
+    "Make /api/timetable/teacher-grid (and the By-teacher matrix) unit-override aware, or document that it uses the institution default config",
+    "Optionally scope report-card access for teachers to their assigned classes",
+    "Optional polish: loading state for the timetable Setup badge; default Audience=Everyone / Status=Published in the notice dialog"
+  ],
+  "critical_code_review_comments": [
+    "server.py is 1852 lines — split into routers (timetable, notices/report-card, resources, auth) per the 700-line guideline",
+    "printDoc.printTimetable / TimetableBuilder / TeacherGrid pick a slot entry with entries.find(day, period_no) — when two entries share a slot with non-overlapping effective_from/to ranges (which the conflict engine legitimately allows), only the first is rendered and no date range is shown",
+    "TeacherTimetable 'Today' card and the weekly grid ignore effective_from/effective_to, so expired or not-yet-active entries are shown as if current",
+    "Conflict engine checks section → teacher → room in order and raises on the first hit; consider aggregating all conflicts in the 409 detail for a better admin UX"
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration12.py", "/app/backend/tests/portal_user_iter12.py", "/app/backend/tests/verify_clean_iter12.py"],
+  "success_rate": {"backend": "100% (43/43)", "frontend": "100% of tested flows"},
+  "seed_data_creation": "Temporary: TEST_Grade 12Z class + section Z + Mathematics offering + Meera assignment + timetable entries (teacher/room/date-range conflict tests), 5 TEST_ notices, a unit-override timetable config for 2026-27, portal login test_aarav_portal@qa.test, and a UI-created Wed P3 entry + TEST_UI_Notice. ALL deleted — Mongo verified: only the intended Grade 6 A Mon P1 Mathematics entry, the 2026-27 institution-default config and the 'Sports Day on Friday' notice remain; Aarav has_portal_access=false. (Unrelated Grade 1 entries belong to another tenant 'LPGS English Medium School'.)",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@greenwood.edu / Green@2026!; meera@greenwood.edu / Teach@2026!; student portal created on demand via /app/backend/tests/portal_user_iter12.py create|delete",
+  "context_for_next_testing_agent": "Run `pytest /app/backend/tests/test_iteration12.py -v -n 0` for timetable/notices/report-card regression; it self-seeds and self-cleans (uses pymongo only to drop the unit-override config since there is no DELETE /timetable/config endpoint — an API gap worth noting). Grade 6 has only section A, so section-level conflict rendering inside EntryDialog could not be exercised through the UI (covered via API instead). Server date is 2026-08-24 (Monday), which is why the teacher 'today' card shows Grade 6 A P1 Mathematics.",
+  "rca_of_the_issue": "No defects requiring RCA. The only functional gap identified is that teacher-grid resolves the institution-default timetable config instead of the academic-unit override of each entry's class, because effective_tt_config is called with academic_unit_id=None (server.py ~line 1244)."
+}

@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 13 full-stack test of teacher & student portal additions: homeroom 'My Class' (roster, attendance %, achievements CRUD, report-card popup, empty state), homeroom access grants (achievements 403, report-card scoping, class-teacher-only attendance access), Teacher Marks Entry (list/read-only published/editable draft, publish forbidden), student portal My Subjects + Attendance History, plus admin regressions. Created /app/backend/tests/test_iteration13.py (25 tests, all pass) and re-ran test_iteration12.py: 68/68 pass serially. All test data created was cleaned up and seeded data restored (section A class_teacher_id restored, Grade 6 A Mon P1 timetable room 'Room 204' restored).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "DELETE /api/res/teacher_assignments/{id}, /api/res/sections/{id}", "issue": "No cascade/orphan handling: deleting a teacher assignment or section leaves timetable_entries (teacher_assignment_id), assessments, marks and attendance sheets pointing at a non-existent parent. Subsequent PUT on such a timetable entry fails with 400 'Teacher assignment not found'."},
+      {"endpoint": "PUT /api/timetable/entries/{id}", "issue": "Merge semantics allow an empty room string to silently blank a previously set room; the seeded Grade 6 A Mon P1 entry had lost room 'Room 204' before this run, which failed 3 test_iteration12 assertions. Restored manually — check the admin timetable edit dialog always sends the existing room."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "TeacherMyClass achievements list", "issue": "awarded_by (teacher name) is returned by POST/GET but never rendered in the achievements list — teachers can't see who awarded an achievement", "selector": "[data-testid^=\"myclass-ach-row-\"]", "priority": "LOW"},
+      {"component": "TeacherMyClass achievements list", "issue": "Delete achievement is a single click with no confirmation dialog (destructive, irreversible)", "selector": "[data-testid^=\"myclass-ach-del-\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Teacher Attendance page + My Class 'Add achievement' dialog", "issues": ["Uses native browser date picker (<input type=\"date\">) instead of the shadcn calendar/date-picker used elsewhere — inconsistent look and native OS UI"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration13.py", "/app/backend/tests/cleanup_iter13.py", "/app/test_reports/pytest/iter13_results.xml"],
+  "action_items": [
+    "Render achievement.awarded_by in the teacher My Class achievements list (and consider showing it on the student portal card)",
+    "Add a confirm step for teacher achievement deletion",
+    "Ensure the admin timetable entry edit dialog preserves 'room' (an empty submit blanks seeded data); consider ignoring empty-string fields on PUT",
+    "Consider cascade/orphan cleanup or validation when teacher assignments/sections are deleted (timetable entries keep dangling teacher_assignment_id)",
+    "Replace native date inputs on the teacher attendance page and achievement dialog with the shadcn date picker",
+    "server.py is 2002 lines — split into routers (teacher, portal, timetable, marks) per code-review guidance"
+  ],
+  "critical_code_review_comments": [
+    "ensure_class_access fallbacks verified correct: subject assignment (exact section), blank-section whole-class assignment, and class-teacher-of-section grant (tested by temporarily deleting Meera's Grade 6/A assignment — attendance sheet still 200; assignment restored).",
+    "_ensure_homeroom_student correctly returns 403 for non-homeroom students and 400 for unknown students; teacher report-card scoping returns 403 for unrelated classes and 200 for homeroom/assigned classes.",
+    "POST /api/assessments/{id}/marks correctly rejects published assessments (400) and out-of-range scores (400); /publish stays 403 for teachers.",
+    "GET /api/portal/me returns subjects[] (teacher_name resolved) and attendance_history[] sorted desc and capped at 30; all responses exclude MongoDB _id."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration13.py", "/app/backend/tests/cleanup_iter13.py"],
+  "success_rate": {"backend": "100% (68/68 incl. 25 new iteration-13 tests)", "frontend": "95% (all flows work; 2 cosmetic gaps)"},
+  "seed_data_creation": "Temporary only, all removed: TEST_Grade 13X class/section + TEST_Foreign student, TEST_Draft Iter13 / TEST_UI Draft Iter13 draft assessments (+marks), TEST_ achievements, portal user test_iter13_portal@qa.test, attendance sheet 2026-07-03 (deleted). Restored: section A class_teacher_id = Meera, Grade 6/A Mathematics assignment, Mon P1 timetable room 'Room 204'.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@greenwood.edu / Green@2026!; meera@greenwood.edu / Teach@2026!; portal login via python /app/backend/tests/portal_user_iter12.py create|delete",
+  "context_for_next_testing_agent": "Run pytest serially: `pytest tests/test_iteration12.py tests/test_iteration13.py -n 0` (68 tests). test_iteration13.py temporarily deletes and re-creates Meera's Grade 6/A Mathematics assignment (new UUID each run) — timetable entries reference teacher_assignment_id, so if a run aborts mid-test the Grade 6 A Mon P1 entry can be orphaned; re-point it or recreate. It also writes an attendance sheet for 2026-07-03 — run `python /app/backend/tests/cleanup_iter13.py` afterwards (also purges TEST_ artifacts and the portal user). Verified UI: /teacher/my-class (header, roster, print popup, achievement add/delete, empty state), /teacher/marks (+ read-only published, editable draft, no publish buttons), /portal (subjects + attendance chips), admin /app/assessments marks page (Publish/Unpublish present), /app/class-hub/{id} report card popup.",
+  "rca_of_the_issue": "The 3 initial test_iteration12 failures were data drift, not a code regression: the seeded Grade 6 A Mon P1 timetable entry's room had been blanked (PUT merges payload, so an empty room string overwrites the stored value). After restoring room='Room 204' via the admin API, test_iteration12 is 43/43 again."
+}

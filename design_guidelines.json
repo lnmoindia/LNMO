@@ -1,0 +1,254 @@
+{
+  "project_name": "LNMO — Multi-tenant School ERP SaaS Platform",
+  "archetype": "Swiss Technical Utility (Admin/Teacher) + Playful Youth Campus (Student Portal)",
+  "theme_support": {
+    "default_theme": "light",
+    "supported_modes": ["light", "dark"],
+    "implementation": "Tailwind dark: class toggle on html/root with local storage key 'lnmo-theme'",
+    "contrast_standards": "WCAG AA / APCA >= 60 Lc for body text, >= 45 Lc for large headings"
+  },
+  "student_portal_playful_makeover": {
+    "vibe_and_tone": "Energizing, encouraging, friendly, and gamified without sacrificing readability or institutional brandability.",
+    "card_geometry": "rounded-2xl md:rounded-3xl border-2 transition-all duration-300 hover:shadow-xl hover:-translate-y-0.5",
+    "hero_profile_banner": {
+      "light_background": "bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white rounded-3xl p-6 shadow-lg shadow-indigo-500/20 relative overflow-hidden",
+      "dark_background": "bg-gradient-to-r from-indigo-900 via-purple-950 to-slate-900 text-white rounded-3xl p-6 border border-indigo-500/30 shadow-xl relative overflow-hidden",
+      "decorative_accents": "Floating subtle glowing spheres, confetti SVG dots, or starburst icons in opacity-20",
+      "leader_badge_styles": {
+        "class_leader": "bg-amber-400 text-amber-950 font-bold px-3 py-1 rounded-full text-xs shadow-md border border-amber-300 flex items-center gap-1.5 animate-pulse",
+        "second_leader": "bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-100 font-bold px-3 py-1 rounded-full text-xs shadow-sm flex items-center gap-1.5"
+      }
+    },
+    "stat_cards": {
+      "attendance_card": "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/60 text-emerald-950 dark:text-emerald-100 rounded-2xl p-5 shadow-sm hover:scale-[1.02] transition-transform",
+      "results_card": "bg-sky-50 dark:bg-sky-950/40 border-sky-200 dark:border-sky-800/60 text-sky-950 dark:text-sky-100 rounded-2xl p-5 shadow-sm hover:scale-[1.02] transition-transform",
+      "class_card": "bg-purple-50 dark:bg-purple-950/40 border-purple-200 dark:border-purple-800/60 text-purple-950 dark:text-purple-100 rounded-2xl p-5 shadow-sm hover:scale-[1.02] transition-transform"
+    },
+    "attendance_streak_and_history": {
+      "present_pill": "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300 border-emerald-300/60 rounded-xl px-3 py-1 text-xs font-semibold shadow-xs flex items-center gap-1",
+      "late_pill": "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300 border-amber-300/60 rounded-xl px-3 py-1 text-xs font-semibold shadow-xs flex items-center gap-1",
+      "absent_pill": "bg-rose-100 text-rose-800 dark:bg-rose-500/20 dark:text-rose-300 border-rose-300/60 rounded-xl px-3 py-1 text-xs font-semibold shadow-xs flex items-center gap-1"
+    },
+    "timetable_today_highlight": {
+      "header_today": "text-indigo-600 dark:text-indigo-400 font-extrabold bg-indigo-100/80 dark:bg-indigo-950/80 px-2 py-0.5 rounded-lg border border-indigo-300 dark:border-indigo-700/60",
+      "cell_today": "bg-indigo-50/80 dark:bg-indigo-950/30 border-2 border-indigo-400/50 dark:border-indigo-500/40 rounded-xl transition-all"
+    },
+    "achievements_section": {
+      "card_style": "bg-gradient-to-br from-amber-50/80 to-orange-50/50 dark:from-amber-950/20 dark:to-orange-950/10 border-2 border-amber-200 dark:border-amber-800/50 rounded-3xl p-6",
+      "badge_icon_container": "h-10 w-10 rounded-2xl bg-amber-400/20 dark:bg-amber-400/10 text-amber-600 dark:text-amber-400 flex items-center justify-center font-bold"
+    }
+  },
+  "teacher_my_profile_spec": {
+    "route": "/teacher/profile",
+    "header": "Teacher Profile & Work Credentials",
+    "sections": [
+      {
+        "title": "Personal & Contact Information",
+        "fields": ["Full Name", "Email Address", "Phone Number", "Emergency Contact Number", "Home Address", "Date of Birth", "Gender"]
+      },
+      {
+        "title": "Institutional Credentials",
+        "fields": ["Employee ID", "Designation / Role", "Qualification & Degrees", "Department", "Joining Date", "Account Status (Active / On Leave)"]
+      },
+      {
+        "title": "Academic Teaching Load",
+        "fields": ["Assigned Classes & Sections", "Assigned Subjects", "Total Active Students"]
+      }
+    ],
+    "interactive_elements": ["Edit Profile Drawer/Dialog", "Change Password Button", "Upload Avatar Button"]
+  },
+  "student_my_profile_spec": {
+    "route": "/portal (Profile Tab / Card)",
+    "header": "Student Identity & Guardian Details",
+    "sections": [
+      {
+        "title": "Academic Information",
+        "fields": ["Full Name", "Admission Number", "Roll Number", "Grade / Class", "Section", "Academic Year", "Leadership Roles (Class Leader / Second Leader)"]
+      },
+      {
+        "title": "Personal Details",
+        "fields": ["Date of Birth", "Gender", "Blood Group", "House / Club Membership"]
+      },
+      {
+        "title": "Guardian & Emergency Info",
+        "fields": ["Primary Guardian Name", "Relationship to Student", "Guardian Phone Number", "Guardian Email Address", "Residential Address"]
+      }
+    ],
+    "interactive_elements": ["View Identity Card PDF", "Request Detail Update Modal"]
+  },
+  "typography": {
+    "heading_font": "Outfit, Cabinet Grotesk, sans-serif",
+    "body_font": "Inter, system-ui, sans-serif",
+    "mono_font": "JetBrains Mono, Source Code Pro, monospace",
+    "scale": {
+      "h1_hero": "text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight",
+      "h2_section": "text-xl sm:text-2xl lg:text-3xl font-semibold tracking-tight",
+      "h3_card": "text-lg sm:text-xl font-medium tracking-tight",
+      "body_standard": "text-sm text-slate-600 dark:text-slate-300 leading-relaxed",
+      "dense_cell": "text-xs font-mono tracking-wide",
+      "overline_label": "text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400"
+    },
+    "forbidden_fonts": ["Space Grotesk", "Comic Sans", "Papyrus", "Inter for H1 Main Headings"]
+  },
+  "colors": {
+    "light": {
+      "background_primary": "#F8FAFC",
+      "background_card": "#FFFFFF",
+      "background_sidebar": "#0F172A",
+      "background_topbar": "#FFFFFF",
+      "border_subtle": "#E2E8F0",
+      "border_interactive": "#CBD5E1",
+      "text_primary": "#0F172A",
+      "text_secondary": "#475569",
+      "text_muted": "#64748B",
+      "brand_primary": "#4338CA",
+      "brand_primary_hover": "#3730A3",
+      "brand_accent": "#D97706",
+      "success": "#059669",
+      "warning": "#D97706",
+      "error": "#DC2626",
+      "info": "#0284C7"
+    },
+    "dark": {
+      "background_primary": "#0B0F17",
+      "background_card": "#1E293B",
+      "background_sidebar": "#090D16",
+      "background_topbar": "#1E293B",
+      "border_subtle": "#334155",
+      "border_interactive": "#475569",
+      "text_primary": "#F8FAFC",
+      "text_secondary": "#CBD5E1",
+      "text_muted": "#94A3B8",
+      "brand_primary": "#6366F1",
+      "brand_primary_hover": "#4F46E5",
+      "brand_accent": "#F59E0B",
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "error": "#EF4444",
+      "info": "#38BDF8"
+    },
+    "playful_student_accents": {
+      "emerald_splash": "#10B981",
+      "amber_gold": "#F59E0B",
+      "violet_dream": "#8B5CF6",
+      "sky_cyan": "#06B6D4",
+      "rose_pop": "#F43F5E"
+    },
+    "forbidden_colors": [
+      "#7351B7 (AI Purple)",
+      "#1B93A4 (Teal Blue for Dashboards)",
+      "#000000 (Pure black, use #0B0F17 or #0F172A instead)"
+    ]
+  },
+  "adaptive_density_system": {
+    "standard_density": {
+      "modules": ["Platform Console Overview", "Institution Overview", "Settings", "Student Portal", "Auth Pages", "Teacher/Student Profiles"],
+      "padding": "p-6 md:p-8",
+      "gap": "gap-6 md:gap-8",
+      "card_padding": "p-5 md:p-6",
+      "table_row_height": "h-12 md:h-14"
+    },
+    "compact_dense_density": {
+      "modules": ["AttendanceGrid", "MarksGrid", "TimetableEditor", "PermissionMatrix", "FeeCollectionRegister"],
+      "padding": "p-3 md:p-4",
+      "gap": "gap-3",
+      "card_padding": "p-3 md:p-4",
+      "table_cell_padding": "px-2 py-1.5",
+      "font_size": "text-xs md:text-sm",
+      "button_size": "h-7 text-xs px-2.5"
+    }
+  },
+  "layout_architectures": {
+    "PublicAuthLayout": {
+      "structure": "Centered auth card with split visual brand panel on desktop, theme toggle top right",
+      "background": "bg-slate-900 text-white dark:bg-slate-950",
+      "brand_area": "Hero tagline, institution statistics, high-res education graphic background with gradient blend"
+    },
+    "PlatformLayout": {
+      "structure": "Left platform sidebar (dark slate #0F172A) + Topbar + Scrollable main content area",
+      "sidebar_sections": [
+        "Global Overview",
+        "Tenants & Institutions",
+        "Subscription Plans",
+        "Entitlements Matrix",
+        "Platform Audit Logs",
+        "System Settings"
+      ]
+    },
+    "InstitutionLayout": {
+      "structure": "Left institution sidebar + Topbar",
+      "sidebar_grouped_sections": [
+        "Main (Dashboard, Analytics)",
+        "Academics (Classes, Sections, Subjects, Timetable)",
+        "People (Students, Teachers, Staff, Guardians, Roles)",
+        "Operations (Attendance, Examinations, Marks Entry, Notices)",
+        "Finance (Fee Structures, Payments, Invoices)",
+        "Administration (Reports, Institution Settings)"
+      ]
+    },
+    "TeacherWorkspaceLayout": {
+      "structure": "Top header + Sidebar + Dashboard, My Classes, Timetable, Marks Entry, Attendance, and My Profile page",
+      "sidebar_sections": [
+        "Dashboard",
+        "My Classes & Students",
+        "Attendance Marking",
+        "Marks Entry",
+        "Weekly Timetable",
+        "My Profile"
+      ]
+    }
+  },
+  "shared_page_patterns": {
+    "DashboardPage": {
+      "components": [
+        "KPI Summary Cards",
+        "Critical Alerts Banner",
+        "Quick Action Grid",
+        "Interactive Analytics Chart",
+        "Recent Activity Stream"
+      ]
+    },
+    "ProfilePage": {
+      "components": [
+        "Profile Header Banner with Avatar & Key Badges",
+        "Tabbed/Sectioned Information Cards (Personal, Academic/Professional, Guardian/Emergency)",
+        "Quick Action Modal (Edit Profile / Password Change)"
+      ]
+    }
+  },
+  "visual_enhancers": {
+    "card_style": "bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs hover:border-slate-300 dark:hover:border-slate-700 transition-colors duration-200",
+    "playful_card_style": "bg-white dark:bg-slate-900 border-2 border-slate-200/80 dark:border-slate-800 rounded-2xl md:rounded-3xl shadow-md hover:shadow-xl transition-all duration-300",
+    "glassmorphism": "backdrop-blur-xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/50 dark:border-slate-800/50",
+    "data_testid_rule": "ALL interactive components, buttons, inputs, links, dropdown items, tabs, menu items, and key metric texts MUST include role-based kebab-case data-testid attributes (e.g., data-testid='login-submit-btn', data-testid='portal-profile-card', data-testid='teacher-profile-tab', data-testid='student-dob-field')."
+  },
+  "icons_and_assets": {
+    "icon_library": "lucide-react",
+    "image_urls": {
+      "brand_hero_bg": "https://images.unsplash.com/photo-1763718432504-7716caff6e99?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHwyfHxzY2hvb2wlMjBzdHVkZW50JTIwZWR1Y2F0aW9uJTIwbGVhcm5pbmclMjBkYXNoYm9hcmQlMjBhdmF0YXJ8ZW58MHx8fHwxNzg3NTc3Mjg2fDA&ixlib=rb-4.1.0&q=85",
+      "institution_campus": "https://images.unsplash.com/photo-1769430886896-dc30842be5a3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w8NjY2NzN8MHwxfHNlYXJjaHszfHxtb2Rlcm4lMjB1bml2ZXJzaXR5JTIwYnVpbGRpbmclMjBzY2hvb2wlMjBjYW1wdXN8ZW58MHx8fHwxNzg3NTc3Mjk3fDA&ixlib=rb-4.1.0&q=85",
+      "teacher_avatars": [
+        "https://images.unsplash.com/photo-1573496799652-408c2ac9fe98?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHxfHx0ZWFjaGVyJTIwdGVhY2hlciUyMGF2YXRhciUyMHBvcnRyYWl0JTIwc2Nob29sfGVufDB8fHx8MTc4NzU3NzI5N3ww&ixlib=rb-4.1.0&q=85",
+        "https://images.pexels.com/photos/8423069/pexels-photo-8423069.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+      ],
+      "student_avatars": [
+        "https://images.pexels.com/photos/36859097/pexels-photo-36859097.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "https://images.pexels.com/photos/5147866/pexels-photo-5147866.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+      ]
+    }
+  },
+  "instructions_to_main_agent": [
+    "Ensure the application strictly renders in `.js` / `.jsx` React files.",
+    "Implement light and dark mode toggling seamlessly with clean Tailwind classes (`dark:bg-slate-900`, `dark:text-slate-100`).",
+    "Make the Student Portal design vibrant, playful, and high-energy with rounded-2xl/rounded-3xl cards, colorful stat badges, animated streak counters, and clear leader badges.",
+    "Implement the My Profile details card/view for both Student Portal (Student details + Guardian Info) and Teacher Workspace (Teacher Credentials + Classes/Subjects load).",
+    "Do NOT use Space Grotesk font or AI gradient purple #7351B7.",
+    "Ensure adaptive density across screens and exact data-testid attributes on all interactive and metric elements for automated testing."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Avoid centered layouts for dense data views. Left-align text and structural content.",
+    "Never use dark color gradients. Use flat dark backgrounds with subtle 1px border outlines.",
+    "Do not use transparent backgrounds without backdrop filters for floating/sticky navigation header bars.",
+    "Ensure all buttons, inputs, links, chips, badges, and text metric containers have kebab-case data-testid attributes."
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "summary": "Iteration 3 full-stack test of the Institution Setup Wizard + enforcement gates. Backend: added /app/backend/tests/test_iteration3.py (20 new tests) covering setup-status, academic-config presets/idempotency, academic_units CRUD + coercion + tenant isolation, subject_offerings validation/dedupe, enrollment/teacher_assignment class-existence gates, classes->academic_unit_name, lookup/academic_units, and a full blank-slate setup->setup_complete->operationally_ready walk. Whole suite: 102/102 pytests pass. Frontend: verified setup gate (fresh admin forced to /app/setup, /app/dashboard blocked, /app/settings allowed), the 8-step rail with green checks, all inline CRUD steps (year, units incl. preset creation + add/delete, classes with required unit select, sections, subjects, teachers), Ready step badges + Go to Dashboard, Greenwood migration banner + Review setup link, fresh-tenant readiness banner, all 13 institution console pages load with no console errors, teacher & platform-admin logins unaffected and both correctly blocked from /app/setup (access-denied).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/res/classes", "issue": "academic_unit_id is optional at API level; a class can be created with no academic unit (and academic_unit_name stays null) even though the new model says classes belong to a unit. Wizard enforces it client-side only."},
+      {"endpoint": "GET /api/institution/stats", "issue": "'teachers' count reads the legacy `teachers` collection while setup-status/readiness counts users with role=teacher, so the dashboard shows Teachers 0 for an institution that has teacher logins (Greenwood and the fresh tenant both showed 0)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "SetupWizard TeachersStep (InlineList endpoint=users)", "issue": "The teachers list renders ALL institution users (the institution admin row 'QA Wizard Admin / qa.wizard@qa.test' appeared) because GET /api/users is not filtered by role=teacher; its delete icon would delete non-teacher users from the wizard.", "selector": "[data-testid=\"setup-teachers\"] tbody tr", "priority": "MEDIUM"},
+      {"component": "Classes console form (config.js classesConfig)", "issue": "'Academic unit' field is not marked required in the console dialog (no * and Create succeeds without it), inconsistent with the wizard where it is required.", "selector": "[data-testid=\"field-academic_unit_id\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Setup wizard · Academic Units step (MODEL_NOTE)", "issues": ["The note renders as three awkwardly stacked/wrapped fragments ('These models are' / 'configured & partially enforced' / 'today (used for readiness...)') because the inline <span> inside the flex <p> breaks layout; should be a single wrapping paragraph."]},
+      {"screen": "Setup wizard · Ready step", "issues": ["The 'Not Operationally Ready (needs teacher + assignment)' pill is very long and low-contrast grey-on-grey compared with the adjacent Setup Complete pill; consider shortening + higher contrast."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/backend/tests/make_qa_institution.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Filter the wizard Teachers step list to role=teacher (add a role filter param to GET /api/users or filter client-side) so admins are not listed/deletable there.",
+    "Make academic_unit_id required for classes in the console form (and ideally validated server-side) to keep every class inside an academic unit.",
+    "Align institution stats 'Teachers' with users(role=teacher) or clarify the label, otherwise dashboard shows 0 teachers while a teacher login exists.",
+    "Fix the Academic Units MODEL_NOTE inline text wrapping."
+  ],
+  "critical_code_review_comments": [
+    "InstitutionLayout.jsx: on a failed /institution/setup-status call it falls back to {setup_complete:true}, i.e. fails open and silently unlocks the console on a backend/network error — consider surfacing an error/retry instead.",
+    "InstitutionLayout re-fetches setup-status on every pathname change (one extra request per navigation); cache it in context or refresh only after mutations.",
+    "server.py startup() migration iterates all institutions on every boot; fine now but should be guarded/one-shot (it already writes migrated_general_unit=false for non-migrated tenants, which is OK) — note it also sets migrated_general_unit:false permanently, so a tenant that later gets classes without units will never be migrated again.",
+    "Setup enforcement is frontend-only for most modules: /api/res/* (e.g. students, subjects, assessments) can still be written before setup_complete; only enrollments/teacher_assignments have class-existence gates."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/backend/tests/make_qa_institution.py"
+  ],
+  "success_rate": {"backend": "100% (102/102 pytests)", "frontend": "~92% (all flows worked; 2 UI/model inconsistencies + 2 design nits)"},
+  "seed_data_creation": "Created and then DELETED a temporary platform-created institution 'QA_Wizard School' (admin qa.wizard@qa.test) plus its teacher qa.teacher1@qa.test. Backend tests create/delete their own TEST_ institutions. IMPORTANT: to test the gate on Greenwood I completed its profile (contact_email=office@greenwood.edu, phone=9445566778), so admin@greenwood.edu is now setup_complete + operationally_ready and lands on /app/dashboard (no longer /app/setup).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Platform admin lnmopvt@gmail.com / Lnmo@2026!; Greenwood admin admin@greenwood.edu / Green@2026! (now setup complete); teacher meera@greenwood.edu / Teach@2026!. Use /app/backend/tests/make_qa_institution.py to spin up a blank tenant (qa.wizard@qa.test / Wizard@2026!) and `python make_qa_institution.py clean` to remove it.",
+  "context_for_next_testing_agent": "Greenwood is now setup_complete/operationally_ready and shows the amber migration banner on /app/dashboard; to retest the setup gate use make_qa_institution.py to create a blank tenant. Wizard data-testids verified: setup-step-<key>, setup-panel-<key>, profile-<field>, profile-save-btn, config-institution-type/config-school-model/config-preset-recommended/config-preset-blank/config-save-btn, inline-field-<name>, inline-<name>-toggle, setup-<x>-add-btn, setup-<x>-delete, setup-ready, setup-go-dashboard-btn, migration-banner, readiness-banner. pytest.ini uses xdist loadscope, so make session-shared tenant fixtures class-scoped (session-scoped ones are duplicated per worker).",
+  "rca_of_the_issue": "No blocking defects. Teachers-step contamination RCA: InlineList posts to /users with extra {role:'teacher'} but its GET /users list is unfiltered, so every institution user (including admins) is rendered with a delete action. Classes-unit RCA: enrich_institution_doc only resolves academic_unit_name when academic_unit_id is supplied and never requires it, so the console form (field not marked required) can create unit-less classes."
+}

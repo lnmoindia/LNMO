@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 11 full-stack test of per-section leaders, section chips/filtering on Class Detail, and Student Portal achievements + leader badge. Seeded a 2nd section (B) + student + achievement + portal login in Greenwood, ran 17 new pytest cases (all pass) plus iteration9/10 regression (23 pass), then 4 Playwright flows (admin class detail filtering, leadership save/clear, achievement add/delete scoping, student portal badges). All requested features work end-to-end. All seeded data cleaned up and section A leader (Aarav Shah) restored; verified final Greenwood state == pre-test state.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Class Detail header stats (class-detail-stats)", "issues": ["Pluralization bug: shows '1 students' and '1 subjects' (sections is correctly pluralized via ternary, students/subjects are not)"]},
+      {"screen": "Student Portal header", "issues": ["Institution name rendered twice (portal_name falls back to institution name and the subtitle also shows institution_name) — 'Greenwood High / Greenwood High'"]},
+      {"screen": "Class Detail deep link", "issues": ["Unknown ?section=ZZ silently renders the All-sections view while the invalid param stays in the URL; no 'section not found' feedback (minor)"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration11.py",
+    "/app/backend/tests/seed_iter11.py",
+    "/app/backend/tests/cleanup_iter11.py",
+    "/app/backend/tests/offer_iter11.py",
+    "/app/test_reports/pytest/iteration11.xml"
+  ],
+  "action_items": [
+    "Cosmetic: fix pluralization of 'students'/'subjects' in class-detail-stats",
+    "Cosmetic: avoid duplicate institution name in Student Portal header",
+    "Consider clearing section.class_leader_id/second_leader_id when the referenced student is deleted or moved to another section/class (stale leader names can persist)"
+  ],
+  "critical_code_review_comments": [
+    "Stale-reference risk: deleting a student (DELETE /res/students/{id}) cascades to achievements/enrollments but does NOT unset sections.class_leader_id/second_leader_id or the resolved names; same for a student whose section is changed. Add cleanup in the delete cascade / student update path.",
+    "Legacy class-level class_leader_id/class_leader fields still live on the classes collection and are still enriched by enrich_institution_doc('classes'); UI ignores them. Recommend a one-time unset migration to avoid two sources of truth.",
+    "GET /portal/me resolves the section by (institution_id, class_name, name); if two classes share a section name the query is still safe, but sections have no unique index on (institution_id, class_name, name) — a duplicate section row would make leader_role non-deterministic.",
+    "ClassDetailPage.jsx is 378 lines and fine, but saveLeadership() always PUTs /res/classes even when the class teacher is unchanged — a minor extra write + audit-log entry per save."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration11.py (new)",
+    "/app/backend/tests/seed_iter11.py (new)",
+    "/app/backend/tests/cleanup_iter11.py (new)",
+    "/app/backend/tests/offer_iter11.py (new)"
+  ],
+  "success_rate": {"backend": "100% (17/17 new + 23/23 iteration9/10 regression)", "frontend": "100% of tested flows"},
+  "seed_data_creation": "Temporarily created (and fully deleted afterwards): section B of Grade 6, student TEST_Bhavya Rao (Grade 6/B), achievement 'TEST_1st place Science Fair', portal login test.bhavya@qa.test, class TEST_Class_Zeta + TEST_Other Kid (cross-class validation), 2 Mathematics offerings (blank-section + section A). Section A leader restored to Aarav Shah; final state verified identical to pre-test.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@greenwood.edu / Green@2026! ; student portal logins are created on demand via seed_iter11.py",
+  "context_for_next_testing_agent": "Verified this iteration: (1) section-switcher chips all/A/B, ?section= param set/cleared, filtering of students table, achievements table, subjects offered (section-specific + whole-class blank-section) and header counts; deep-link ?section=B lands filtered. (2) Per-section leadership card: class-leader-select/second-leader-select options limited to that section's students, class-teacher-select at class level, save-leadership-btn does both PUTs, prefill after reload, Leader/2nd badges on the right student rows, summary 'Sec A: Aarav Shah · Sec B: ...', leaders-hint shown in All-sections with leader selects hidden, clearing to 'Not set' clears stored name. (3) API validation: bogus class_leader_id -> 400 'Selected student not found' with nothing persisted; student of another class -> 400 'Student is not in this class'. (4) Portal: GET /api/portal/me returns achievements[] + leader_role; portal-achievements card and portal-leader-badge show 'Class Leader'/'Second Leader' correctly; admin gets 403 on /portal/me. (5) Regression: achievement add/delete from class page (dialog student options scoped to selected section), Class Hub chips/tabs unchanged, class-teacher save intact. Re-run: python /app/backend/tests/seed_iter11.py then pytest tests/test_iteration11.py -v -n 0 then python cleanup_iter11.py.",
+  "rca_of_the_issue": "No functional defects found. Only cosmetic pluralization/duplicate-branding nits and stale-leader-reference hardening suggestions."
+}

@@ -1,0 +1,6 @@
+first_name,last_name,admission_no,email,date_of_birth,gender,guardian_name,guardian_phone,guardian_email,address
+TESTQA1,Kumar,QA9001,qa1@test.com,2012-05-04,male,Ravi Kumar,9990001111,rk@test.com,12 QA Street
+TESTQA2,Singh,QA9002,qa2@test.com,2012-06-04,female,Neha Singh,9990002222,ns@test.com,13 QA Street
+,NoFirstName,QA9003,qa3@test.com,2012-07-04,male,Anon Guardian,9990003333,ag@test.com,14 QA Street
+TESTQA4,Dup,QA9001,qa4@test.com,2012-08-04,male,Dup Guardian,9990004444,dg@test.com,15 QA Street
+TESTQA5,Shah,GW001,qa5@test.com,2012-09-04,female,DB Dup Guardian,9990005555,dd@test.com,16 QA Street

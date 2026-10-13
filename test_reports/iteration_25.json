@@ -1,0 +1,26 @@
+{
+  "summary": "Phase 39 frontend testing (LNMO Library reference-only attach + in-app preview). End-to-end flow verified for LPGS teacher prasad27@lpgs.com in Grade 9 Mathematics. All 5 features in the review request pass: Browse+Search (ai-library-browser/ai-library-search filters correctly, bogus query -> 0 items, SCERT keyword -> 1 item), Preview before Attach (ai-library-preview + ai-preview-iframe + ai-preview-title + ai-preview-open-tab + ai-preview-close all working for SCERT 9th Maths PDF), Attach by Reference (clicking ai-library-attach-<id> adds a pick without any file-upload prompt, button flips to 'Added \u2713'), Detail Preview (navigating to /teacher/ai-tutor/curriculum/<cid> shows ai-item-lib-badge-<id> 'LNMO LIBRARY' badge on the attached item and ai-item-preview-<id> opens the same iframe modal; non-library file items also preview correctly), and Regression (wizard create flow still works end-to-end, draft saves to list, detail page delete-draft removes it). SCERT template prefill note: 'Start from Kerala SCERT template' button is wired and clickable; backend returned 'No Kerala SCERT template for Grade 9 Mathematics yet' toast (expected per data, not a bug). LPGS left clean - 0 drafts remaining after test teardown.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "AITutorTeacher subject <select>", "issues": ["React hydration warning in console: '<span> cannot be a child of <option>'. Caused by visual-edit span wrappers injected into option text, non-blocking but noisy."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "LibraryPreview relies on cookie-auth iframe stream /api/ai/central-library/{lid}/file - OK in-browser but will not render if cookies are 3rd-party-blocked; consider also exposing a signed URL for robustness.",
+    "AITutorTeacher.jsx is 618 lines with 3+ embedded components (CreateDialog, LibraryBrowser, ContributeDialog). File size > 500 lines - consider splitting into separate files for maintainability.",
+    "Minor: option element contains injected visual-edit <span>, triggers React hydration warning (dev-only tooling, not a product bug)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "skipped (per request)", "frontend": "100% (14/14 critical checks passed across 2 runs)"},
+  "test_credentials": "LPGS teacher prasad27@lpgs.com / teach123 (used)",
+  "seed_data_creation": "None persisted - two throwaway drafts created and deleted during the run; final verification confirmed 0 DRAFT remaining under Grade 9 Mathematics for Prasad Nair.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Flow: login lpgs -> /teacher/ai-tutor -> select 'Grade 9 \u00b7 Mathematics' from [data-testid=ai-subject-select] -> click [data-testid=ai-create-curriculum-btn] -> step1 upload any PDF (input[type=file]) -> 'Next: Chapters' -> fill a chapter name -> 'Next: Materials' -> wait for [data-testid=ai-library-browser] -> SCERT 9th Maths PDF is the only lib item for this slot. Detail page is NOT the inline summary; must click [data-testid=ai-view-detail-btn] which navigates to /teacher/ai-tutor/curriculum/<cid>; only there the LNMO LIBRARY badge and ai-item-preview-<id> appear.",
+  "rca of the issue": "N/A - no issues observed."
+}

@@ -1,0 +1,53 @@
+{
+  "summary": "Full-stack test of LNMO multi-tenant School ERP MVP. Backend: created pytest suite (36 tests) covering auth (login/me/refresh/logout/lockout/inactive), platform CRUD (tenants/institutions/plans), institution CRUD (students/teachers/classes/sections/subjects), users management, institution profile, stats, audit, RBAC and cross-institution isolation — 36/36 PASS. Frontend: Playwright E2E across platform console (login, dashboard stats, tenant create/edit/delete, plan CRUD with shadcn Select, institution creation with admin account, audit log 25 rows, logout), institution console (dashboard 6 stat cards, students CRUD, teachers/classes/sections/subjects create+delete, users create with role Select, duplicate-email error in dialog, settings load+save+persist, pagination 20 records over 2 pages, search, theme toggle), role guards (unauth /app/* -> /login, inst-admin -> /access-denied, platform-admin -> /access-denied, teacher -> /portal-coming-soon and blocked from /app/*), brute-force lockout message after 5 fails. Auth playbook verified: bcrypt $2b$12$ hash, httpOnly+Secure+SameSite=None+Partitioned cookies, unique index on users.email, login_attempts index, seed_admin re-hashes when env password changes. All test data cleaned; DB back to empty-start with only the seeded platform admin.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "DELETE /api/res/institutions/{id}", "issue": "No cascade cleanup. Deleting an institution leaves its users, students, teachers, classes, sections, subjects and audit rows behind. The orphaned institution_admin can still log in (200) and reach /app/dashboard, but GET /api/institution/profile then returns 404 so /app/settings is permanently broken and user.institution_name is null. Reproduced: 4 orphan users remained after institution deletes. Needs cascade delete (or soft-delete + block login when institution missing/inactive).", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "CORS middleware (server.py:409)", "issue": "allow_credentials=True combined with CORS_ORIGINS=\"*\" is an invalid pair for credentialed cross-origin requests (browsers reject wildcard + credentials). Works today only because the preview ingress makes frontend/backend same-origin. Use explicit origin list from env."},
+      {"endpoint": "POST/PUT/DELETE /api/users", "issue": "Restricted to institution_admin only, so a platform_admin can list users (GET) but cannot create/edit/delete any — GET/mutation permissions are inconsistent."},
+      {"endpoint": "POST /api/res/{resource}", "issue": "No Pydantic model / field whitelist: arbitrary keys and types are persisted (e.g. status can be any string, email/phone never validated, capacity/price accept strings). Only 'name/first_name required' is enforced."},
+      {"endpoint": "POST /api/users, POST /api/res/institutions", "issue": "No password strength/length validation for created login accounts (1-char password accepted)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ActivityFeed (components/common/StatCard.jsx:37)", "issue": "Action label built as `{a.action}d` renders wrong copy: 'lnmopvt@gmail.com logind session' for login events. Use a label map (login -> 'signed in', create -> 'created', ...).", "selector": "[data-testid=\"recent-activity\"]", "priority": "MEDIUM"},
+      {"component": "AccessDeniedPage", "issue": "Only offers 'Back to sign in'; a logged-in user who hits /access-denied has no link back to their own console and no user menu / logout on that page.", "selector": "[data-testid=\"access-denied-page\"]", "priority": "LOW"},
+      {"component": "ResourcePage users form", "issue": "In edit mode the Password field renders empty with no helper text; users cannot tell that leaving it blank keeps the existing password.", "selector": "[data-testid=\"field-password\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Institution settings save (and both dashboards)", "issue": "Effects fire twice (React StrictMode) so GET /api/institution/profile, /api/auth/me and /stats each run twice. On /app/settings the late second GET overwrites the form state, so text typed within ~1.5s of page load is silently discarded and the stale value is PUT instead. Reproduced once (name edit lost); passed when typing was delayed. Guard with an ignore/abort flag in the effect.", "affected_selectors": ["[data-testid=\"settings-field-name\"]", "[data-testid=\"settings-save-btn\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "Institution dashboard @390px (mobile)", "issues": ["124px horizontal overflow — the 6 stat cards / quick-actions grid is clipped and the page scrolls sideways; grid needs to respect the mobile container width"]},
+      {"screen": "Platform & institution dashboards (desktop)", "issues": ["'Quick actions' card is stretched to the height of the activity feed leaving a large empty white block below the last link (use items-start / self-start)"]},
+      {"screen": "Student create/edit dialog", "issues": ["Date of birth uses the native browser date input (type=\"date\") instead of the shadcn calendar/date-picker used elsewhere in the design system"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/backend/tests/seed_ui_pagination.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Add cascade cleanup on institution delete (users + all institution-scoped collections) and/or block login for users whose institution no longer exists",
+    "Fix ActivityFeed action wording ('logind session')",
+    "Fix mobile horizontal overflow (124px) on institution dashboard stat grid",
+    "Guard the settings/dashboard fetch effects against double-invoke overwriting typed form state",
+    "Replace CORS_ORIGINS='*' + allow_credentials with an explicit origin list from env",
+    "Add Pydantic request models / field whitelist + password strength validation for /api/res/{resource} and /api/users",
+    "Align platform_admin permissions on /api/users (currently read-only while GET is allowed)"
+  ],
+  "critical_code_review_comments": [
+    "server.py: generic /api/res/{resource} accepts unvalidated free-form dicts — add per-resource Pydantic schemas; today a client can store any field/type in any collection.",
+    "server.py create_resource: institution row is inserted before the admin-email uniqueness check and then rolled back with a manual delete_one — reorder the check before insert to avoid a non-atomic window.",
+    "server.py: no cascade/tenant integrity — institutions are not linked to tenants and deleting an institution orphans users and academic records.",
+    "Frontend data fetching effects (PlatformDashboard, InstitutionDashboard, InstitutionSettingsPage, ResourcePage) share the same load/error pattern; extract a small useFetch hook (DRY) and add an is-stale guard."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py", "/app/backend/tests/seed_ui_pagination.py"],
+  "success_rate": {"backend": "100% (36/36 pytest)", "frontend": "95% (all functional flows pass; 1 race + copy/layout defects)"},
+  "seed_data_creation": "Created and then removed: test tenants/plans, 3 institutions with institution_admin accounts (test_admin_*, uiadmin578054@greenwood.test / Green@2026!), a teacher user, 20 PAGE_* students for pagination. DB restored to empty-start state (only seeded platform admin, all audit logs purged).",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Platform admin lnmopvt@gmail.com / Lnmo@2026! (works). Institution admins are created on demand — /app/backend/tests/backend_test.py provisions its own (Green@2026!).",
+  "context_for_next_testing_agent": "Run `cd /app/backend && python -m pytest tests/backend_test.py -v` — it self-provisions institutions/admins with a random suffix and cleans up institutions on teardown (note: orphan users remain because backend has no cascade delete; purge with mongosh db.users.deleteMany({role:{$ne:'platform_admin'}}) if needed). Use /app/backend/tests/seed_ui_pagination.py <email> <password> <n> to seed students for UI pagination. Frontend flows already verified: platform tenant/plan/institution CRUD, institution students/teachers/classes/sections/subjects CRUD, users create + duplicate error, settings, pagination, search, theme toggle, all role guards, lockout message. Retest focus after fixes: institution delete cascade, settings typing race, ActivityFeed wording, mobile 390px overflow.",
+  "rca_of_the_issue": "Cascade issue: delete_resource only removes the single document from its own collection; users and institution-scoped collections keep institution_id references, and get_current_user/login never check that the referenced institution still exists — hence orphan admins log in successfully but /institution/profile 404s. Settings race: useEffect in InstitutionSettingsPage has no stale-response guard, so under StrictMode double-invocation the second GET's setValues overwrites user input typed before it resolved."
+}

@@ -1,0 +1,41 @@
+{
+  "summary": "Phase 22 Assignments module end-to-end validation on LPGS (live). Created /app/backend/tests/test_phase22_live.py (8 tests, all pass) and re-ran /app/backend/tests/test_phase22.py sandbox suite (6/6 pass). Validated the full acceptance loop: subject-teacher prasad27 creates Grade 8-A Mathematics 'TEST_ASG_P22_Algebra' max_marks=25 counts_toward_report=ON; unrelated teachers manoj & sreeja get 403 on create AND on reading the submission inbox; max_marks<1 → 422. g8student submits a PDF; verify-without-score → 400; score 99 (>max) → 400; score -1 → 400; score 21 → 200 and stored. Admin GET /api/students/{g8student_id}/report-card contains the assignment under assignment_scores Mathematics block with {score:21, max_marks:25}, while a second untagged (counts_toward_report=OFF) verified assignment with score 8/10 is correctly absent. Redo path: redo without feedback → 400; redo with feedback clears score and sets status=redo; student resubmit bumps version→2 and status→submitted. Close/reopen: closed blocks submit with 400 ('Submissions closed'), reopen restores. GET /students/{id}/assignment-stats returns assigned/verified counts and non-null avg_score. Phase 21 homework regression smoke: GET /api/homework still returns 200 for prasad27 (no regression from _store_hw_files base-param change). Frontend verified: Teacher Assignments page (data-testid teacher-assignments-page) renders, create dialog opens with all testids present (assignment-class-select, assignment-title-input, assignment-due-input, assignment-maxmarks-input default 25, assignment-counts-toggle, assignment-files-input, assignment-create-submit); 4 live-created assignment cards appear with CLOSED/On report chips and Submissions/Reopen buttons. Student portal Assignments tab (portal-nav-assignments → portal-assignments) shows the 4 live assignments with correct status badges including 'SCORED 21/25' (tagged with gold-star 'On report' icon) and 'SCORED 8/10' (untagged, no star). Scope correct (only Grade 8-A rows visible).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Teacher Assignments → New assignment dialog", "issues": ["Due-date field uses the native browser datetime-local picker (<input type=\"datetime-local\">) instead of the shadcn date picker used elsewhere — same inconsistency flagged for Phase 21 homework (iterations 13 & 14). Not a bug, cosmetic consistency."]},
+      {"screen": "Teacher Assignments → Score action", "issues": ["Score entry uses window.prompt() (per spec) rather than an in-app shadcn dialog — functional but jarring vs the rest of the UI. Low priority."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase22_live.py",
+    "/app/backend/tests/test_phase22.py",
+    "/app/test_reports/pytest/phase22_live.xml"
+  ],
+  "action_items": [
+    "(Optional, non-blocking) Replace native datetime-local due-date input in TeacherAssignments.jsx CreateDialog with the shadcn date-time picker for visual consistency.",
+    "(Optional, non-blocking) Consider replacing window.prompt-based score entry with an in-app shadcn dialog containing numeric input + feedback field."
+  ],
+  "critical_code_review_comments": [
+    "Permission model is correctly enforced end-to-end: _teaches_subject reused from Phase 21 blocks manoj (HS, no Maths assignment) and sreeja (LP) with 403, same as homework.",
+    "Verify endpoint correctly rejects verified-without-score (400), out-of-range score (400), and redo-without-feedback (400); redo correctly clears score to None.",
+    "Report-card integration is clean: _assignment_report_scores filters on counts_toward_report AND status=verified, grouped by subject, with {title, score, max_marks} items. Verified live: tagged present, untagged absent.",
+    "Submit endpoint now returns the full submission object (id, version, status, late) — resolves the Phase 21 action-item from iteration_14 (although the Phase 21 /homework/submit still returns only {message, late}).",
+    "server.py now 6898 lines — flagged for several iterations. Still single-file; please split into routers (homework, assignments, portal, teacher, admin, principal, marks, auth)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase22_live.py (new)"
+  ],
+  "success_rate": {"backend": "100% (8/8 live + 6/6 sandbox)", "frontend": "100% of tested flows (teacher page + create dialog testids present, cards render with CLOSED/On report chips, student portal shows correct SCORED N/max badges with ⭐ for tagged)"},
+  "test_credentials": "LPGS prasad27@lpgs.com/teach123 (G8 Math), manoj@lpgs.com/teach123 & sreeja@lpgs.com/teach123 (unrelated 403), g8student@lpgs.com/student123, admin@lpgs.com/admin123.",
+  "seed_data_creation": "On LPGS: 4 live Grade 8-A Mathematics assignments were created and left in CLOSED state (couldn't be deleted — they have submissions by g8student): TEST_ASG_P22_Algebra_1791216304 (tagged, scored 21/25), TEST_ASG_P22_Untagged_1791216307 (untagged, scored 8/10), TEST_ASG_P22_Redo_1791216309 (redo flow, resubmitted v2), TEST_ASG_P22_Close_1791216310 (closed/reopened/submitted). The 'TEST_ASG_P22_perm' prasad create attempts in test_create_permission_parity also added one more open assignment per run (that one is not closed) — this is acceptable per the review-request note. If accumulation becomes a concern, add a sweep at the top of the live suite that lists prasad's TEST_ASG_P22_* and closes them.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `pytest backend/tests/test_phase22_live.py -n 0 -v` for a full live regression of Phase 22 (prasad/manoj/sreeja/g8student/admin on LPGS). Suite leaves 4-5 TEST_ASG_P22_* assignments per run (mostly closed, one open from the permission-parity happy path). test_phase22.py uses a throwaway Mongo DB. Phase 21 homework regression test is already included at the end of the live suite.",
+  "rca_of_the_issue": "No bugs found. Phase 22 implementation matches the spec exactly: permission parity with Phase 21, max_marks Pydantic validation, score-required-and-in-range gate on verify, redo-clears-score behavior, counts_toward_report surfacing on report-card only when both tagged AND verified, close/reopen gating, parent/principal scope, and notification fan-out including parents. No action items block the acceptance flow."
+}

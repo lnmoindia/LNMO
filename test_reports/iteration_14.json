@@ -1,0 +1,45 @@
+{
+  "summary": "Phase 21 Homework module end-to-end validation on LPGS (live) + sandbox pytest. Added /app/backend/tests/test_phase21_live.py (14 live tests, all pass) and re-ran /app/backend/tests/test_phase21.py (6/6 pass). Validated the full acceptance loop: subject-teacher (prasad27) creates Grade 8-A Mathematics homework; unrelated teachers (manoj HS, sreeja LP) get 403 on create; student (g8student) sees + submits a file+note; teacher inbox lists the submission (manoj gets 403 on inbox); redo requires feedback (400 without); redo-with-feedback flips status, student resubmit bumps version>=2 and status returns to submitted; teacher verify succeeds; close+reopen works and close blocks student submit with 400; homework-stats returns assigned/submitted/verified; bell /api/notifications fan-out contains homework entries for both student and teacher. Frontend verified end-to-end: teacher Homework page loads (data-testid teacher-homework-page), create dialog opens, class/section/subject dropdown lists prasad's assigned (class_name section subject) tuples, title+due inputs work, Create homework returns toast + card appears, Submissions modal lists submissions with Pending roster, Close/Reopen toggles state. Student /portal → Homework tab correctly scoped (only Grade 8-A homework shown; the Grade 10 UI-test HW did NOT appear for g8student — scope OK), status badge reflects server state (SUBMITTED / VERIFIED).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/homework/{id}/submit", "issue": "Response is {message, late} only — does not return the submission id/version. Live UI/clients that chain actions must GET /submissions after submit to resolve id. Consider returning the full submission object (id, version, status, late)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "TeacherHomework CreateDialog", "issue": "React hydration warning: <span> cannot be a child of <option>. The native <select> option content is wrapped in a <span data-ve-dynamic> by the dev tooling, triggering a console error on every render. Not functionally broken but noisy and could be a real hydration bug in production builds.", "selector": "TeacherHomework.jsx:97 (option element inside opts.map)", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "TeacherHomework CreateDialog", "issues": ["Due-date field uses the native browser datetime-local picker (<input type=\"datetime-local\">) instead of the shadcn date picker used elsewhere — inconsistent look across the app (same pattern flagged in iteration_13)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase21_live.py",
+    "/app/backend/tests/test_phase21.py",
+    "/app/test_reports/pytest/phase21_live.xml"
+  ],
+  "action_items": [
+    "Return the created submission object (id, version, status, late) from POST /api/homework/{id}/submit so clients don't have to re-fetch the inbox.",
+    "Fix the <option><span> hydration warning in TeacherHomework.jsx CreateDialog (either render plain text or move the span out of the <option>).",
+    "Consider replacing the native datetime-local due-date input with the shadcn date-time picker for consistency."
+  ],
+  "critical_code_review_comments": [
+    "Permission model is correctly enforced: _teaches_subject checks teacher_assignments for exact class+subject (section-specific or whole-class blank-section). Class-teacher-of-section without subject assignment is correctly denied (verified live with sreeja/manoj).",
+    "delete_homework returns 409 when any submission exists — verified live (TEST_HW_P21_* with submissions could not be deleted).",
+    "Attachment constraints (<=10MB, <=5 files, pdf/jpg/png/webp/doc/docx) are enforced in HW_ATTACH_TYPES/HW_MAX_* — covered by sandbox test_phase21.py.",
+    "Notifications: _notify fan-out to class+section students and linked parents on new HW and to assigning teacher on submission is working (bell shows homework entries live).",
+    "server.py is now 6451 lines — well beyond the 700-line guideline. Please split into routers (homework, portal, teacher, admin, principal, timetable, marks, auth) — this has been flagged for several iterations."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase21_live.py (new)"
+  ],
+  "success_rate": {"backend": "100% (14/14 live + 6/6 sandbox)", "frontend": "100% of tested flows (create, inbox modal, close/reopen reflect, student portal scope, submitted badge). Minor hydration warning and inconsistent date picker remain."},
+  "test_credentials": "LPGS: prasad27@lpgs.com/teach123 (G8 Math + G10 Math teacher); manoj@lpgs.com/teach123 and sreeja@lpgs.com/teach123 (unrelated teachers for 403 tests); g8student@lpgs.com/student123; admin@lpgs.com/admin123.",
+  "seed_data_creation": "Created on LPGS (not fully reversible): 2 Grade 8-A Mathematics homework rows (TEST_HW_P21_1791214024 and TEST_HW_P21_1791214052) that could not be deleted because they received submissions during the test loop — both are now status=closed (reopen flow tested on the second one which is now open/closed? verified via verify_final then close+reopen). The Grade 10 UI-test homework (TEST_UI_HW_1791214084) with no submissions was deleted after testing. Submissions for the student (g8student) remain and will show as part of their homework history — acceptable per review_request note allowing Grade 8 Maths homework creation on LPGS.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `pytest backend/tests/test_phase21_live.py -n 0 -v` for a full live regression of the Phase 21 loop (prasad/manoj/sreeja/g8student/admin on LPGS). The suite is idempotent on creation but leaves 1 TEST_HW_P21_close_* HW per run (open) plus one submission on the main TEST_HW. If HWs accumulate, the teacher inbox will have many 'TEST_' rows; purge via platform tool or add a sweep at the end of the test. test_phase21.py uses a throwaway Mongo DB and is unaffected by live state.",
+  "rca_of_the_issue": "No bugs found. Minor action items only: enrich /submit response payload and clean the <option><span> hydration warning. Both are low-impact and already called out in action_items."
+}

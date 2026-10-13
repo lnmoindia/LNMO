@@ -1,0 +1,36 @@
+{
+  "summary": "Frontend-only testing of Phase 2 'Class Hub' consolidation (institution admin admin@greenwood.edu). Verified sidebar IA, legacy route redirects, hub load + testids, class chip selection/summary, scoped vs all-classes behaviour (hideFields/extra/filter) on Sections/Enrollments/Teacher Assignments/Subject Offerings, Classes tab create with required academic unit, subject-offering duplicate rejection, delete flows, mobile layout, and regression across admin/teacher/platform pages. All test data created during the run was deleted (Greenwood restored to 1 class / 1 section / 1 enrollment / 1 teacher assignment / 0 offerings). 1 minor data bug found; no blockers.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/res/classes (list)", "issue": "academic_unit_name is only stamped on create/update, so the migrated class 'Grade 6' (unit backfilled via update_many in the migration) returns no academic_unit_name -> Classes tab 'Unit' column renders '—' even though the chip is correctly grouped under 'General'. Migration should backfill academic_unit_name, or the list should resolve the unit name (or ClassHub should fall back to units.find(id).name)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ClassHub > Classes tab", "issue": "Existing/migrated class shows Unit '—' (see backend minor issue: academic_unit_name missing on migrated docs). Newly created classes show 'General' correctly.", "selector": "[data-testid=\"hub-classes\"] tbody tr", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Teacher Assignments via hub", "issue": "No dedupe: assigning the same teacher+class+subject with a blank section creates a second, near-duplicate assignment (existing row was Grade 6/A/Mathematics; new row Grade 6/(all)/Mathematics was accepted silently). Subject offerings do dedupe. Confirm whether class-wide vs section-level duplicates should be rejected.", "affected_selectors": ["[data-testid=\"hub-teachers-add-btn\"]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/test_reports/iteration_4.json"],
+  "action_items": [
+    "Backfill academic_unit_name for classes migrated into the default unit (or resolve unit name at read time / client-side) so the Classes tab Unit column is not '—'.",
+    "Decide/implement dedupe rules for teacher_assignments (same teacher+class+subject with blank vs specific section currently both allowed)."
+  ],
+  "critical_code_review_comments": [
+    "InlineList: `canAdd` only validates visible required fields — correct for hidden class_name (injected via `extra`), but if `extra` is ever missing the POST would fail server-side; consider validating hidden required fields against `extra`.",
+    "ClassHub `filter`/`extra` key off `selected.name` (class name string). Renaming a class would orphan sections/offerings referencing the old name — class_name string coupling is a latent data-integrity risk (ids would be safer).",
+    "ClassHub loads 5 collections with limit 500 on every refresh; counts are computed client-side. Fine now, will not scale for large tenants — consider a server-side summary endpoint."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend-only request)", "frontend": "~97% (all Phase-2 acceptance flows pass; 1 minor display bug, 1 dedupe question)"},
+  "seed_data_creation": "Temporary: section 'QAB', subject offering Mathematics/Grade 6/all-sections, teacher assignment Meera/Grade 6/Mathematics (no section), class 'QA Grade 9' — all deleted at end of testing via the UI delete buttons; Greenwood state restored.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@greenwood.edu / Green@2026! ; meera@greenwood.edu / Teach@2026! ; lnmopvt@gmail.com / Lnmo@2026!",
+  "context_for_next_testing_agent": "Verified in this iteration: sidebar Academics = Class Hub/Subjects/Academic Years/Academic Units (no Classes/Sections/Enrollments/Teacher Assignments); /app/classes|sections|enrollments|teacher-assignments all redirect to /app/class-hub; all documented data-testids present (class-hub, class-selector, class-chip-all, class-chip-Grade 6 with '1 sec · 1 std · N subj', class-hub-tabs, hub-tab-<key>, hub-panel-<key>, class-summary, inline-field-<name>, hub-<tab>-add-btn/-delete); scoped mode hides Class field, shows 'Showing Grade 6 only' note, filters list, and injects class_name on create (verified 'QAB' section persisted as Grade 6); All-classes clears selection, hides summary, shows Class field and lists all rows; Classes tab Add is disabled until Academic unit is picked and new class chip appears under its unit without reload; subject offering duplicate rejected with toast 'This subject is already offered for this class/section'; enrollment duplicate correctly blocked with toast 'Student is already enrolled for this academic year' (only one seeded student exists, so a brand-new enrollment could not be created — create an extra student to test a fresh enrollment); teacher assignment created with resolved teacher name; deletes work on all tabs; mobile 390px has no horizontal overflow. Teacher role hitting /app/class-hub -> /access-denied. NOT re-verified: setup gate for a blank institution (qa.wizard@qa.test no longer exists — run /app/backend/tests/make_qa_institution.py to recreate). Note this failed login may have counted toward brute-force lockout for that email only.",
+  "rca_of_the_issue": "academic_unit_name is denormalised into class docs inside enrich_institution_doc, which runs only on POST/PUT. The Phase-1 migration used classes.update_many to set academic_unit_id without setting academic_unit_name, so pre-existing classes lack the field and the ClassHub Classes column (key: academic_unit_name) falls back to '—'."
+}

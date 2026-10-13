@@ -1,0 +1,30 @@
+{
+  "summary": "Targeted verification of iteration-9 fixes on Greenwood tenant: (1) Section dropdown concatenated-label bug, (2) auto-generated subject code, (3) Class Hub regressions. Backend: 10/10 new pytests pass (/app/backend/tests/test_iteration9.py). Frontend: Playwright runs on /app/class-hub and /app/subjects all passed — Section trigger renders a single clean 'A' (never 'A (Grade 1)A (Grade 2)'), options deduped, dependsOn scoping + reset work, subject auto-code works via UI. All test data cleaned up.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Class Hub chip auto-scope + Section dropdown", "issue": "MINOR edge case: when a section is already chosen in the form and the user then switches the class *chip* (extra.class_name from the chip rail, not the in-form class Select), the section value is NOT reset (InlineList.set() only resets dependents on in-form field change). Repro: All classes -> Teacher Assignments -> pick Section 'A' -> click chip 'Grade X' that has no section 'A'; trigger still shows 'A' and could be submitted for a class that has no such section.", "affected_selectors": ["[data-testid=\"inline-field-section\"]", "[data-testid^=\"class-chip-\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "/app/subjects table", "issues": ["Legacy subject 'Mathematics' shows TYPE as '—' while newly created subjects show 'Core' (no default backfill/display fallback for the type column). Cosmetic only."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration9.py", "/app/backend/tests/seed_section_dup.py", "/app/test_reports/pytest/iteration9.xml"],
+  "action_items": [
+    "Optional (minor): also reset dependent field values in InlineList when the `extra`/chip-provided dependency value changes, not just on in-form Select change."
+  ],
+  "critical_code_review_comments": [
+    "server.py lookup/sections dedupe + class_name filter is correct and label==value (no parenthesised class suffix), which is the actual root cause fix for the Radix Select concatenated-trigger bug (Radix renders all SelectItem children whose value matches the selected value; duplicate values 'A' with different labels caused both labels to render in the trigger).",
+    "Subject auto-code loop (server.py ~L308-315) is unbounded-in-theory but bounded in practice by unique-code check; fine. Code is scoped per institution_id — verified.",
+    "server.py is ~1355 lines — exceeds the 700-line guideline; consider splitting routers (lookups, resources, marks, portal) into modules."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration9.py", "/app/backend/tests/seed_section_dup.py"],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% of targeted flows"},
+  "seed_data_creation": "Temporarily created classes TEST_Grade1/TEST_Grade2 each with sections A & B, 1 subject offering, and 4 TEST_ subjects. ALL deleted afterwards (verified: classes=[Grade 6], sections=[A/Grade 6], subjects=[Mathematics], subject_offerings=[]).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@greenwood.edu / Green@2026!",
+  "context_for_next_testing_agent": "Verified in this iteration: GET /api/lookup/sections dedupes and returns plain labels, ?class_name= filter (exact match, unknown class -> []); POST /api/res/subjects auto-code (multi-word initials TSSS, dup suffix TSSS2, single word first-4, explicit code preserved); UI: /app/class-hub Subject Offerings/Enrollments/Teacher Assignments section dropdown shows single clean 'A', options deduped, options scoped to selected class (Grade 6 chip -> only ['A']), section resets on in-form class change; offering create with the scoped form works; bulk-offer dialog opens (testids bulk-offer-unit/back/next). Use /app/backend/tests/seed_section_dup.py to recreate the duplicate-section-name scenario and `python seed_section_dup.py clean` to remove it.",
+  "rca_of_the_issue": "Original bug: lookup/sections returned one entry per section row with label 'A (Grade 1)' style duplicates sharing the same value 'A'. Radix Select renders the text of every SelectItem whose value equals the selected value inside the trigger, so both items' labels were concatenated. Fix (dedupe by name + optional class_name scoping + dependsOn in InlineList) resolves it; confirmed by DOM text of [data-testid=inline-field-section] being exactly 'A'."
+}

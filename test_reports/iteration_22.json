@@ -1,0 +1,29 @@
+{
+  "summary": "Phase 36 (LNMO Central Library + Kerala SCERT templates) end-to-end testing. Backend: all 7 pytest tests in tests/test_phase36.py PASS (large-file 45MB upload + background extraction, >60MB rejection, template seed, non-platform 403, pending→approved import+badge, material-import-requires-chapter, school-submit→platform-approve). Frontend: platform /platform/library loads with all data-testids (platform-library, lib-tab-library, lib-tab-templates, lib-up-grade/-type, lib-filter-grade/-status); upload WITHOUT file (grade Grade 8, subject Mathematics, type textbook, title 'QA Test TB …') succeeds and appears as published; grade+status filter works. Chapter templates tab shows both seeded templates (Grade 8 · Basic Science (18 chapters) and Grade 8 · Mathematics (10 chapters)); Edit → Save shows 'Template saved' toast. Teacher wizard Create curriculum on Grade 10 Mathematics opens 3-step ai-create-dialog with all step/field testids; step-2 'Start from Kerala SCERT template' (ai-wiz-load-template) is present and gracefully toasts 'No Kerala SCERT template for Grade 10 Mathematics yet' when no template exists (G10 has none; G8 Mathematics seed verified via backend test). Contribute dialog on Grade 8 Mathematics shows 'Browse LNMO Library' panel (ai-library-browser) listing published items for the curriculum's grade+subject with Attach buttons (ai-library-attach-<id>); attaching the uploaded textbook returned toast 'QA Test TB 1791281938 attached — pending principal approval'. Curriculum detail drawer on Grade 8 Mathematics for the teacher shows 3 'Submit to LNMO Library' buttons (ai-item-submit-lib-<id>); clicking returned 'Submitted to LNMO Library — awaiting platform approval'. One critical runtime bug found and fixed in CurriculumDetail.jsx (missing Library icon import — 'Library is not defined' blew up ItemRow for every row with submit/lib-badge rendering).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CurriculumDetail.jsx > ItemRow", "issue": "FIXED — missing `Library` icon import from lucide-react caused Uncaught ReferenceError: 'Library is not defined' when the detail drawer rendered any item (every row renders a Submit to LNMO Library button and/or LNMO Library badge). Entire drawer crashed for teacher + admin.", "selector": "[data-testid^='ai-item-submit-lib-'], [data-testid^='ai-item-lib-badge-']", "priority": "CRITICAL (fixed)"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Teacher AI Tutor subject <select>", "issues": ["Pre-existing hydration warning: visual-editor instrumentation injects <span data-ve-dynamic> inside <option> (React warns span cannot be child of option). No functional impact."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_phase36.py"],
+  "action_items": [
+    "No action — critical Library import bug already patched by tester (CurriculumDetail.jsx line 2). Please verify the fix in next build and re-run yarn build to confirm no regressions."
+  ],
+  "critical_code_review_comments": [
+    "CurriculumDetail.jsx used Library icon in two places (ai-item-lib-badge, ai-item-submit-lib) without importing it — would have crashed every drawer open in production. Suggest adding a lint rule / lazy build check or icon-usage sanity test; this type of missing-import regression has shipped twice in the AI Tutor pages.",
+    "No visible delete affordance in UI for a platform library item (lib-delete-<id> testid exists per earlier probe), but a per-item delete button text is not surfaced on the current Published list card — verify delete action is still reachable from the UI (platform admin may need an inline × / Delete button in the row). Did not block the test case."
+  ],
+  "updated_files": ["/app/frontend/src/pages/ai/CurriculumDetail.jsx"],
+  "success_rate": {"backend": "100% (7/7 phase36 pytest)", "frontend": "100% after Library-import fix (all Phase 36 UI testids verified live)"},
+  "test_credentials": "Platform: lnmopvt@gmail.com / Lnmo@2026!. LPGS teacher: prasad27@lpgs.com / teach123.",
+  "seed_data_creation": "Platform library: 1 published textbook item 'QA Test TB 1791281938' (Grade 8 · Mathematics, no file). Attached to LPGS Grade 8 Mathematics curriculum as pending (import-library). Teacher submitted 2 existing Grade 8 Mathematics items ('Algebra basics' notes, 'Algebra practice worksheet') + 1 syllabus to LNMO Library as pending school submissions. No deletions; LPGS live curriculum intact.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 36 fully validated end-to-end after single fix. The Library icon import fix in CurriculumDetail.jsx should also unblock any other Phase 31.5/35 drawer flows that render Submit-to-LNMO-Library/badge. Key testids verified live: platform-library, lib-tab-library, lib-tab-templates, lib-up-grade/-type, lib-filter-grade/-status, lib-up-submit, ai-create-dialog, ai-wiz-step-1/2/3, ai-wiz-textbook-title, ai-wiz-textbook-file, ai-wiz-load-template, ai-wiz-next-1, ai-contribute-btn, ai-contribute-dialog, ai-library-browser, ai-library-attach-<id>, ai-item-submit-lib-<id>, ai-item-lib-badge-<id>. Pending platform-approval items from this test run can be approved/deleted to clean up.",
+  "rca of the issue": "CurriculumDetail.jsx added two new usages of the `<Library>` lucide icon (badge + submit button in ItemRow) but did not update the top-level named import list `import { ... } from 'lucide-react'`. React threw ReferenceError on first render of any ItemRow. Fix: added `Library` to the named-imports list on line 2."
+}
