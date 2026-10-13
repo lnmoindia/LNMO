@@ -3,6 +3,7 @@ import api from "../../lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { PasswordInput } from "./PasswordInput";
 import { Label } from "../ui/label";
 import { Textarea } from "../ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -53,6 +54,8 @@ export const FormDialog = ({ open, onClose, title, fields, initial, onSubmit, su
                 </Select>
               ) : f.type === "textarea" ? (
                 <Textarea id={f.name} value={values[f.name] || ""} onChange={(e) => set(f.name, e.target.value)} data-testid={`field-${f.name}`} />
+              ) : f.type === "password" ? (
+                <PasswordInput id={f.name} required={f.required} value={values[f.name] || ""} onChange={(e) => set(f.name, e.target.value)} data-testid={`field-${f.name}`} />
               ) : (
                 <Input
                   id={f.name}

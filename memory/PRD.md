@@ -730,3 +730,20 @@ User-confirmed rules: same-section default (8-A→9-A) with per-student override
 - No new data endpoints. Branding comes from the existing GET /api/me/branding. Tests: iteration_38 passed 100%.
 - Backlog: notices have no read/unread state. A teacher without fee access sees a harmless 403 console error from the fee-proofs badge call that existed before this phase.
 
+
+## Phase 55 (Oct 2026): Login improvements
+- Students can sign in with their admission number on the branded /login/<code> page. The match is case-insensitive and scoped to that school. On the generic /login page, an admission number gets guidance to use the school's link instead. Wrong admission numbers get the generic "Invalid credentials" message.
+- The lockout (5 failed tries, then 15 minutes) now applies per account (user:<id>), whichever identifier is used. Lockouts are audited as account_locked.
+- New endpoints: GET /api/account-locks, GET /api/account-locks/{uid}, POST /api/account-locks/{uid}/unlock (audited as unlock_account).
+  - School admins can unlock anyone in their own school. Principals can unlock students and teachers in their own divisions. The platform admin can unlock school admins.
+  - The lock badge and Unlock button appear on the student profile, the teacher profile and the Users list (Sign-in column and row action).
+- Every password field now has a show/hide eye toggle (PasswordInput).
+- There is still no per-IP limit on login (it was not there before either).
+
+## LNMO logo (Oct 2026)
+- Platform Manager → Settings → Platform branding: upload the logo, preview it, or reset to the default. Files go to object storage. backend/logo_processing.py makes the background transparent, keeps the eye white, trims the edges and generates the PNG sizes, an SVG trace and the icon set.
+- Assets are served at /api/public/platform-brand/{name}. The bundled defaults are in backend/static/brand.
+- The logo now appears in the platform and admin sidebars, the generic login page, "Powered by" footers, the favicon, manifest.json and the Product Guide v1.3 cover.
+- Receipts, statements and other PDFs never showed LNMO, so they are unchanged.
+- Tests: iteration_39 (Phase 55) and iteration_40 (logo) both passed 100%.
+

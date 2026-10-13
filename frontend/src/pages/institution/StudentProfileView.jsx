@@ -8,6 +8,7 @@ import api, { errText } from "../../lib/api";
 import { toast } from "sonner";
 import { Button } from "../../components/ui/button";
 import { printReportCard } from "../../lib/printDoc";
+import { AccountLock } from "../../components/common/AccountLock";
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const fullName = (s) => `${s?.first_name || ""} ${s?.last_name || ""}`.trim() || "—";
@@ -70,7 +71,8 @@ export default function StudentProfileView() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <AccountLock userId={s.user_id || s.id} />
           <Button variant="outline" onClick={sendReportCard} disabled={sending} data-testid="student-send-report-card"><Send size={15} className="mr-1.5" /> {sending ? "Sending…" : "Send report card"}</Button>
           <Button variant="outline" onClick={printCard} data-testid="student-print-report-card"><Printer size={15} className="mr-1.5" /> Report card</Button>
         </div>

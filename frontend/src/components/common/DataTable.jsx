@@ -43,7 +43,7 @@ export const DataTable = ({ columns, rows, loading, onEdit, onDelete, rowActions
               {(onEdit || onDelete || rowActions) && (
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-1 justify-end">
-                    {rowActions?.map((a) => (
+                    {rowActions?.filter((a) => !a.show || a.show(row)).map((a) => (
                       <button key={a.title} title={a.title} onClick={() => a.onClick(row)} data-testid={`${a.testId}-${row.id}`} className="h-7 w-7 rounded flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-slate-800 transition-colors">
                         <a.icon size={14} />
                       </button>

@@ -33,7 +33,10 @@ export const platformNav = [
   },
   {
     group: "Governance",
-    items: [{ label: "Audit Log", path: "/platform/audit", icon: ScrollText }],
+    items: [
+      { label: "Audit Log", path: "/platform/audit", icon: ScrollText },
+      { label: "Settings", path: "/platform/settings", icon: Settings },
+    ],
   },
 ];
 

@@ -7,6 +7,7 @@ import { DataTable, Pagination } from "../../components/common/DataTable";
 import { FormDialog } from "../../components/common/FormDialog";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import { PasswordInput } from "../../components/common/PasswordInput";
 import { Label } from "../../components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -349,7 +350,7 @@ export default function StudentsPage() {
           <div className="space-y-3 py-1">
             <Input placeholder="Parent email" value={parentForm.email} onChange={(e) => setParentForm((f) => ({ ...f, email: e.target.value }))} data-testid="parent-email-input" />
             <Input placeholder="Parent name (for new accounts)" value={parentForm.name} onChange={(e) => setParentForm((f) => ({ ...f, name: e.target.value }))} data-testid="parent-name-input" />
-            <Input type="password" placeholder="Password (only for new accounts)" value={parentForm.password} onChange={(e) => setParentForm((f) => ({ ...f, password: e.target.value }))} data-testid="parent-password-input" />
+            <PasswordInput placeholder="Password (only for new accounts)" value={parentForm.password} onChange={(e) => setParentForm((f) => ({ ...f, password: e.target.value }))} data-testid="parent-password-input" />
             {linkedParents.length > 0 && (
               <div className="rounded-lg border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-800" data-testid="linked-parents-list">
                 {linkedParents.map((p) => (
@@ -391,7 +392,7 @@ export default function StudentsPage() {
               </DialogHeader>
               <div className="space-y-4 py-2">
                 <div className="space-y-1.5"><Label>Login email</Label><Input type="email" value={portalForm.email} onChange={(e) => setPortalForm((f) => ({ ...f, email: e.target.value }))} data-testid="portal-email" /></div>
-                <div className="space-y-1.5"><Label>Password</Label><Input type="password" value={portalForm.password} onChange={(e) => setPortalForm((f) => ({ ...f, password: e.target.value }))} data-testid="portal-password" /></div>
+                <div className="space-y-1.5"><Label>Password</Label><PasswordInput value={portalForm.password} onChange={(e) => setPortalForm((f) => ({ ...f, password: e.target.value }))} data-testid="portal-password" /></div>
               </div>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setPortalFor(null)}>Cancel</Button>

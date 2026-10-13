@@ -1,0 +1,14 @@
+{
+  "short_name": "LNMO",
+  "name": "LNMO School ERP",
+  "icons": [
+    { "src": "/api/public/platform-brand/favicon.ico", "sizes": "16x16 32x32 48x48", "type": "image/x-icon" },
+    { "src": "/api/public/platform-brand/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/api/public/platform-brand/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/api/public/platform-brand/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#0b0f17",
+  "background_color": "#ffffff"
+}

@@ -6,6 +6,7 @@ import { useTheme } from "../../context/ThemeContext";
 import { useReportIssue } from "../../context/ReportIssue";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
 import { BrandMark, brandVars } from "./useSchoolBrand";
+import { PoweredBy } from "../../components/common/LnmoLogo";
 
 // Shared parent/student layout: desktop sidebar, mobile bottom nav (4 + More), sticky top bar.
 export default function PortalShell({ brand, label, nav, bottom, base, extra, query = "", testid, children }) {
@@ -36,7 +37,7 @@ export default function PortalShell({ brand, label, nav, bottom, base, extra, qu
             </NavLink>
           ))}
         </nav>
-        <p className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 text-[10px] text-slate-400" data-testid="portal-powered-by">Powered by LNMO</p>
+        <PoweredBy className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 text-[10px] text-slate-400" testid="portal-powered-by" />
       </aside>
 
       <div className="flex-1 min-w-0 flex flex-col">
@@ -64,7 +65,7 @@ export default function PortalShell({ brand, label, nav, bottom, base, extra, qu
           </DropdownMenu>
         </header>
         <main className="w-full max-w-5xl mx-auto px-3 sm:px-5 md:px-8 py-5 md:py-8 pb-28 md:pb-10 space-y-5">{children}</main>
-        <p className="md:hidden text-center text-[10px] text-slate-400 pb-20">Powered by LNMO</p>
+        <PoweredBy className="md:hidden justify-center text-[10px] text-slate-400 pb-20" testid="portal-powered-by-mobile" />
       </div>
 
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border-t border-slate-200 dark:border-slate-800 flex pb-[env(safe-area-inset-bottom)]" data-testid="portal-bottom-nav">

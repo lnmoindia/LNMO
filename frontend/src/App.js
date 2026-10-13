@@ -31,8 +31,10 @@ import TeacherProfileView from "./pages/institution/TeacherProfileView";
 import HomeworkMonitor from "./pages/institution/HomeworkMonitor";
 import PlatformCommunication from "./pages/platform/PlatformCommunication";
 import PlatformLibrary from "./pages/platform/PlatformLibrary";
+import PlatformSettings from "./pages/platform/PlatformSettings";
 import CommunicationPage from "./pages/institution/CommunicationPage";
 import StudentProfileView from "./pages/institution/StudentProfileView";
+import UsersPage from "./pages/institution/UsersPage";
 import ChangePasswordPage from "./pages/institution/ChangePasswordPage";
 import ParentSetupPage from "./pages/ParentSetupPage";
 import FeeLinkPage from "./pages/FeeLinkPage";
@@ -134,6 +136,7 @@ function App() {
               <Route path="plans" element={<ResourcePage {...plansConfig} />} />
               <Route path="communication" element={<PlatformCommunication />} />
               <Route path="library" element={<PlatformLibrary />} />
+              <Route path="settings" element={<PlatformSettings />} />
               <Route path="issues" element={<PlatformIssues />} />
               <Route path="audit" element={<AuditPage />} />
             </Route>
@@ -162,7 +165,7 @@ function App() {
               <Route path="teachers" element={<TeachersPage />} />
               <Route path="teachers/:id" element={<AdminOrPrincipal><TeacherProfileView /></AdminOrPrincipal>} />
               <Route path="principals" element={<AdminOnly><PrincipalsPage /></AdminOnly>} />
-              <Route path="users" element={<AdminOnly><ResourcePage {...usersConfig} /></AdminOnly>} />
+              <Route path="users" element={<AdminOnly><UsersPage /></AdminOnly>} />
               <Route path="classes" element={<Navigate to="/app/class-hub" replace />} />
               <Route path="sections" element={<Navigate to="/app/class-hub" replace />} />
               <Route path="subjects" element={<ResourcePage {...subjectsConfig} headerExtra={({ reload }) => <SubjectImportButton onDone={reload} />} />} />

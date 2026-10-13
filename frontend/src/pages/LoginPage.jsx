@@ -7,6 +7,8 @@ import api, { errText } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { PasswordInput } from "../components/common/PasswordInput";
+import { LnmoLogo, LnmoMark, PoweredBy } from "../components/common/LnmoLogo";
 
 export const roleHome = (role) =>
   role === "platform_admin" ? "/platform/dashboard"
@@ -80,13 +82,13 @@ export default function LoginPage({ platform = false }) {
   const formEl = (
             <form onSubmit={submit} className="space-y-4" data-testid="login-form">
               <div className="space-y-1.5">
-                <Label htmlFor="email">{platform ? "Email" : "Email or mobile number"}</Label>
-                <Input id="email" type={platform ? "email" : "text"} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} placeholder={platform ? "you@institution.edu" : "you@institution.edu or 98470 12345"} data-testid="login-email-input" />
-                {!platform && <p className="text-[11px] text-slate-400" data-testid="login-phone-hint">Students & staff: use your school email. Parents: email or registered mobile number.</p>}
+                <Label htmlFor="email">{platform ? "Email" : "Email, mobile or admission no."}</Label>
+                <Input id="email" type={platform ? "email" : "text"} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} placeholder={platform ? "you@institution.edu" : "you@school.edu, 98470 12345 or SPS-001"} data-testid="login-email-input" />
+                {!platform && <p className="text-[11px] text-slate-400" data-testid="login-phone-hint">Students: school email or admission number. Parents: email or registered mobile. Staff: school email.</p>}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="password">Password</Label>
-                <Input id="password" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" data-testid="login-password-input" />
+                <PasswordInput id="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" data-testid="login-password-input" />
               </div>
               {error && <p className="text-sm text-red-600" data-testid="login-error">{error}</p>}
               <Button type="submit" disabled={loading} style={brand?.primary_color ? { backgroundColor: brand.primary_color } : undefined} className="w-full bg-indigo-700 hover:bg-indigo-800 text-white h-10" data-testid="login-submit-btn">
@@ -103,7 +105,9 @@ export default function LoginPage({ platform = false }) {
         <div className="relative flex items-center gap-3">
           {logoSrc
             ? <img src={logoSrc} alt="logo" className="h-10 w-10 rounded-xl object-cover" data-testid="login-brand-logo" />
-            : <div className="h-10 w-10 rounded-xl flex items-center justify-center font-heading font-bold text-white text-lg" style={{ background: brand?.primary_color || "#4f46e5" }}>{(brand?.name || "L")[0]}</div>}
+            : brand?.name
+              ? <div className="h-10 w-10 rounded-xl flex items-center justify-center font-heading font-bold text-white text-lg" style={{ background: brand?.primary_color || "#4f46e5" }}>{brand.name[0]}</div>
+              : <LnmoMark className="h-10" testid="login-lnmo-mark" />}
           <span className="font-heading font-bold text-white text-xl tracking-tight">{brand?.name || "LNMO"}</span>
         </div>
         <div className="relative space-y-6">
@@ -139,8 +143,10 @@ export default function LoginPage({ platform = false }) {
             <div className="lg:hidden flex items-center gap-3 mb-8">
               {logoSrc
                 ? <img src={logoSrc} alt="logo" className="h-9 w-9 rounded-lg object-cover" />
-                : <div className="h-9 w-9 rounded-lg flex items-center justify-center font-heading font-bold text-white" style={{ background: brand?.primary_color || "#4f46e5" }}>{(brand?.name || "L")[0]}</div>}
-              <span className="font-heading font-bold text-slate-900 dark:text-white text-lg">{brand?.name || "LNMO"}</span>
+                : brand?.name
+                  ? <div className="h-9 w-9 rounded-lg flex items-center justify-center font-heading font-bold text-white" style={{ background: brand?.primary_color || "#4f46e5" }}>{brand.name[0]}</div>
+                  : <LnmoLogo className="h-16" testid="login-lnmo-logo-mobile" />}
+              {(logoSrc || brand?.name) && <span className="font-heading font-bold text-slate-900 dark:text-white text-lg">{brand?.name}</span>}
             </div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-2">
               {platform ? "Platform Console" : "Sign in"}
@@ -200,7 +206,7 @@ function BrandedLogin({ school, form, theme, toggle }) {
           {form}
         </div>
       </div>
-      <p className="relative pb-4 pt-2 text-center text-[11px] text-slate-400 md:text-white/60 bg-slate-50 dark:bg-[#0B0F17] md:bg-transparent md:dark:bg-transparent" data-testid="login-powered-by">Powered by LNMO</p>
+      <PoweredBy className="relative justify-center pb-4 pt-2 text-[11px] text-slate-400 md:text-white/70 bg-slate-50 dark:bg-[#0B0F17] md:bg-transparent md:dark:bg-transparent" testid="login-powered-by" />
     </div>
   );
 }

@@ -13,6 +13,7 @@ import {
 } from "../ui/dropdown-menu";
 
 import { BrandMark, brandVars } from "../../pages/portal/useSchoolBrand";
+import { LnmoMark, PoweredBy } from "../common/LnmoLogo";
 
 const SidebarNav = ({ nav, onNavigate, badges = {} }) => {
   const loc = useLocation();
@@ -105,7 +106,7 @@ export default function AppShell({ nav, consoleLabel, brand }) {
           </div>
         ) : (
           <>
-            <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center font-heading font-bold text-white text-sm">L</div>
+            <LnmoMark className="h-8" testid="sidebar-lnmo-mark" />
             <div>
               <p className="font-heading font-bold text-white leading-none tracking-tight">LNMO</p>
               <p className="text-[10px] uppercase tracking-wider text-slate-500 mt-1">{consoleLabel}</p>
@@ -119,7 +120,7 @@ export default function AppShell({ nav, consoleLabel, brand }) {
           <ScopeChip user={user} variant="dark" />
         </div>
       )}
-      {brand?.name && <p className="px-5 py-2.5 border-t border-slate-800/70 text-[10px] text-slate-500 shrink-0" data-testid="sidebar-powered-by">Powered by LNMO</p>}
+      {brand?.name && <PoweredBy className="px-5 py-2.5 border-t border-slate-800/70 text-[10px] text-slate-500 shrink-0" testid="sidebar-powered-by" />}
       {user?.institution_name && !brand?.name && (
         <div className="px-5 py-3 border-t border-slate-800/70 shrink-0">
           <p className="text-[10px] uppercase tracking-wider text-slate-500">Institution</p>

@@ -6,10 +6,11 @@ export const NEUTRAL = "#3f6b8a";
 export const absUrl = (u) => (u && u.startsWith("/api") ? `${API}${u}` : u);
 
 const setFavicon = (href) => {
-  let link = document.querySelector("link[rel~='icon']");
-  if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
-  if (!link.dataset.orig) link.dataset.orig = link.href || "/favicon.ico";
-  link.href = href || link.dataset.orig;
+  const links = [...document.querySelectorAll("link[rel~='icon']")];
+  links.forEach((link) => {
+    if (!link.dataset.orig) link.dataset.orig = link.href;
+    link.href = href || link.dataset.orig;
+  });
 };
 
 // School brand for parent/student/teacher portals: name, logo, accent colour; sets tab title + favicon.

@@ -7,6 +7,7 @@ import {
 import api, { errText } from "../../lib/api";
 import { toast } from "sonner";
 import { Button } from "../../components/ui/button";
+import { AccountLock } from "../../components/common/AccountLock";
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -52,6 +53,7 @@ export default function TeacherProfileView() {
             </span>
             {p.employee_id && <span className="inline-flex items-center gap-1.5"><ClipboardList size={14} /> {p.employee_id}</span>}
           </div>
+          <div className="mt-2"><AccountLock userId={p.id} /></div>
         </div>
       </div>
 

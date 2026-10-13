@@ -133,11 +133,13 @@ def test_phone_login_failures_and_email_regression(ctx):
     r = _login(C, "9199999999", "whatever1")
     assert r.status_code == 401 and r.json()["detail"] == "Invalid mobile number or password"
     assert _login(C, "9100000001", "wrongpass").status_code == 401
-    assert db.login_attempts.find_one({"identifier": "phone:9100000001"})["count"] == 1
+    pu = db.users.find_one({"role": "parent", "phone": "9100000001"}, {"id": 1})
+    assert db.login_attempts.find_one({"identifier": f"user:{pu['id']}"})["count"] == 1
     # teachers are never matched by phone
     assert _login(C, "9100000009", "Teach@123").status_code == 401
-    # not a phone (too short) → treated as email → 401 email message
-    assert _login(C, "12345", "x12345").json()["detail"] == "Invalid email or password"
+    # not a phone/email and no school context → admission-number guidance (Phase 55)
+    r = _login(C, "12345", "x12345")
+    assert r.status_code == 400 and "school's login link" in r.json()["detail"]
     # email login unchanged
     assert _login(C, "t@p47a.test", "Teach@123").status_code == 200
     assert _login(C, "A@P47A.TEST", "Admin@123").status_code == 200

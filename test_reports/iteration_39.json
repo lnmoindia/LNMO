@@ -1,0 +1,28 @@
+{
+  "summary": "Phase 55 (admission-number login, cross-identifier lockout, admin unlock, password eye toggle) tested end-to-end on Sunrise/TEST. All 12 pytests pass (test_phase55_login.py 5/5, test_phase47.py 7/7). Frontend verified: eye toggle on branded login (type password<->text, aria-label 'Show password'<->'Hide password', type=button, value preserved, re-hides on submit); admission SPS-001 and sps-001 login succeed on /login/sunrise desktop + mobile 390; email login still works; generic /login with SPS-001 shows 'Use your school's login link, or sign in with your email'; /login/p50demo with SPS-001 returns 'Invalid credentials'. Lockout verified: 5 bad attempts mixing email and admission number returns 429 on both identifiers. Admin UI: Users list at /app/users shows locked-badge-<uid> 'Locked — unlocks at HH:MM' on aarav row and unlock-row-<uid> action on locked rows only; clicking unlock clears badge and aarav logs in immediately with Sunrise@2026. OpenAPI exposes /api/account-locks, /api/account-locks/{uid}, /api/account-locks/{uid}/unlock. Aarav ends unlocked with password Sunrise@2026 (verified 200 at the end).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase55_login.py",
+    "/app/backend/tests/test_phase47.py",
+    "/app/test_reports/pytest/phase55_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "backend/server.py is >13000 lines — scoping and lock helpers for Phase 55 are fine, but overall file is well past the 700-line rule and should be modularised (auth, account-locks, students, etc.) in a dedicated refactor.",
+    "Login has per-account lockout only; no per-IP limiter (OTP endpoints have one). Consider a shared per-IP throttle for /api/auth/login to blunt distributed brute-force.",
+    "Platform admin unlock path is backend-only (platform UI has no school-admin list). Fine for now — note already in agent-to-agent context."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Sunrise /login/sunrise: admin@sunrise-demo.in, aarav@sunrise-demo.in (adm SPS-001), lakshmi@sunrise-demo.in, parent.menon@sunrise-demo.in — all password Sunrise@2026. TEST /login/p50demo: admin@feesdemo.test/admin123, principal.lp@feesdemo.test/teach123. Platform: lnmopvt@gmail.com / Lnmo@2026!.",
+  "seed_data_creation": "None. Lock state created during tests was cleared; aarav ends unlocked.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 55 fully green. Toast assertion in playwright was flaky (toast fades <3s) but functional outcome (badge removed, user can log in) is correct. test_phase55_login.py is the regression file. Backend file is huge; keep this in mind for future reviews.",
+  "rca of the issue": "N/A — no issues found."
+}

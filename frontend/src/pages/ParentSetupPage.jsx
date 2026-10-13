@@ -5,6 +5,7 @@ import api, { errText } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { PasswordInput } from "../components/common/PasswordInput";
 
 const Shell = ({ title, subtitle, children }) => (
   <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 px-4 py-10">
@@ -20,7 +21,7 @@ const Shell = ({ title, subtitle, children }) => (
 );
 
 const Field = ({ id, label, ...p }) => (
-  <div className="space-y-1.5"><Label htmlFor={id}>{label}</Label><Input id={id} {...p} /></div>
+  <div className="space-y-1.5"><Label htmlFor={id}>{label}</Label>{p.type === "password" ? <PasswordInput id={id} {...p} /> : <Input id={id} {...p} />}</div>
 );
 
 const enterPortal = () => window.location.assign("/parents");

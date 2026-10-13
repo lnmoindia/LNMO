@@ -274,6 +274,53 @@ async def _find_parent_by_login_phone(phone: str, payload: dict):
     return matches[0] if matches else None
 
 
+async def _find_student_by_admission(iid: str, adm: str):
+    s = await db.students.find_one(
+        {"institution_id": iid, "admission_no": {"$regex": f"^\\s*{re.escape(adm.strip())}\\s*$", "$options": "i"}},
+        {"_id": 0, "user_id": 1})
+    if not s or not s.get("user_id"):
+        return None
+    return await db.users.find_one({"id": s["user_id"], "institution_id": iid, "role": "student"})
+
+
+async def _account_lock_keys(u: dict):
+    """Every login_attempts identifier that can belong to this account."""
+    keys = [f"user:{u['id']}"]
+    if u.get("email"):
+        keys.append(u["email"].lower())
+    p = _login_phone(u.get("phone") or "")
+    if p:
+        keys.append(f"phone:{p}")
+    if u.get("role") == "student" and u.get("institution_id"):
+        s = await db.students.find_one({"user_id": u["id"], "institution_id": u["institution_id"]}, {"_id": 0, "admission_no": 1})
+        if s and s.get("admission_no"):
+            keys.append(f"adm:{u['institution_id']}:{s['admission_no'].strip().lower()}")
+    return keys
+
+
+async def _active_lock(keys: list):
+    """Latest active lock across keys → {locked_until, last_failed_at, count} or None."""
+    now, best = datetime.now(timezone.utc), None
+    async for a in db.login_attempts.find({"identifier": {"$in": keys}}, {"_id": 0}):
+        last = datetime.fromisoformat(a["last_at"])
+        until = last + timedelta(minutes=LOCK_MINUTES)
+        if a.get("count", 0) >= LOCK_MAX and until > now and (not best or until > best["_until"]):
+            best = {"_until": until, "locked_until": until.isoformat(), "last_failed_at": a["last_at"], "count": a["count"]}
+    if best:
+        best.pop("_until")
+    return best
+
+
+async def _record_login_failure(key: str, user: "dict | None" = None):
+    a = await db.login_attempts.find_one({"identifier": key}, {"_id": 0})
+    if a and datetime.now(timezone.utc) - datetime.fromisoformat(a["last_at"]) >= timedelta(minutes=LOCK_MINUTES):
+        await db.login_attempts.delete_one({"identifier": key})
+    r = await db.login_attempts.find_one_and_update(
+        {"identifier": key}, {"$inc": {"count": 1}, "$set": {"last_at": now_iso()}}, upsert=True, return_document=True)
+    if user and r and r.get("count") == LOCK_MAX:
+        await audit(user, "account_locked", "user", user["id"], user.get("name"), institution_id=user.get("institution_id"))
+
+
 @api.post("/auth/login")
 async def login(response: Response, payload: dict = Body(...)):
     raw = (payload.get("email") or payload.get("identifier") or "").strip()
@@ -281,25 +328,104 @@ async def login(response: Response, payload: dict = Body(...)):
     if not raw or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
     phone = _login_phone(raw)
-    email = f"phone:{phone}" if phone else raw.lower()
-    attempt = await db.login_attempts.find_one({"identifier": email})
-    if attempt and attempt.get("count", 0) >= LOCK_MAX:
-        locked_at = datetime.fromisoformat(attempt["last_at"])
-        if datetime.now(timezone.utc) - locked_at < timedelta(minutes=LOCK_MINUTES):
-            raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 15 minutes.")
-        await db.login_attempts.delete_one({"identifier": email})
-    user = await (_find_parent_by_login_phone(phone, payload) if phone else db.users.find_one({"email": email}))
-    if not user or not verify_password(password, user["password_hash"]):
-        await db.login_attempts.update_one({"identifier": email},
-                                           {"$inc": {"count": 1}, "$set": {"last_at": now_iso()}}, upsert=True)
-        raise HTTPException(status_code=401, detail="Invalid mobile number or password" if phone else "Invalid email or password")
+    if phone:
+        ident, fail_msg = f"phone:{phone}", "Invalid mobile number or password"
+        user = await _find_parent_by_login_phone(phone, payload)
+    elif "@" in raw:
+        ident, fail_msg = raw.lower(), "Invalid email or password"
+        user = await db.users.find_one({"email": ident})
+    else:
+        iid = await _login_school(payload)
+        if not iid:
+            raise HTTPException(status_code=400, detail="Use your school's login link, or sign in with your email")
+        ident, fail_msg = f"adm:{iid}:{raw.lower()}", "Invalid credentials"
+        user = await _find_student_by_admission(iid, raw)
+    keys = [ident] + (await _account_lock_keys(user) if user else [])
+    if await _active_lock(keys):
+        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 15 minutes.")
+    if not user or not user.get("password_hash") or not verify_password(password, user["password_hash"]):
+        await _record_login_failure(f"user:{user['id']}" if user else ident, user)
+        raise HTTPException(status_code=401, detail=fail_msg)
     if user.get("status") == "inactive":
         raise HTTPException(status_code=403, detail="Account is inactive. Contact your administrator.")
-    await db.login_attempts.delete_one({"identifier": email})
+    await db.login_attempts.delete_many({"identifier": {"$in": keys}})
     access, refresh = make_tokens(user)
     set_auth_cookies(response, access, refresh)
     await audit(user, "login", "session")
     return await public_user(user)
+
+
+async def _lock_target(actor: dict, uid: str):
+    """Resolve a user (or student record id) the actor may unlock; 403 outside scope."""
+    t = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0})
+    if not t:
+        s = await db.students.find_one({"id": uid}, {"_id": 0, "user_id": 1})
+        if s and s.get("user_id"):
+            t = await db.users.find_one({"id": s["user_id"]}, {"_id": 0, "password_hash": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Account not found")
+    role = actor.get("role")
+    if role == "platform_admin":
+        if t.get("role") == "institution_admin":
+            return t
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not actor.get("institution_id") or t.get("institution_id") != actor["institution_id"]:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if role == "institution_admin" and t.get("role") != "platform_admin":
+        return t
+    scope = await principal_scope(actor) if role == "teacher" else None
+    if scope and t["id"] != actor["id"]:
+        if t.get("role") == "teacher" and await _absence_in_scope(actor, t["id"]):
+            return t
+        if t.get("role") == "student":
+            s = await db.students.find_one({"user_id": t["id"], "institution_id": t["institution_id"]}, {"_id": 0, "class_name": 1})
+            if scope["whole_school"] or (s and s.get("class_name") in (scope["class_names"] or [])):
+                return t
+    raise HTTPException(status_code=403, detail="Access denied")
+
+
+@api.get("/account-locks")
+async def list_account_locks(user: dict = Depends(get_current_user)):
+    """Currently paused accounts the caller may unlock."""
+    since = (datetime.now(timezone.utc) - timedelta(minutes=LOCK_MINUTES)).isoformat()
+    out, seen = [], set()
+    async for a in db.login_attempts.find({"count": {"$gte": LOCK_MAX}, "last_at": {"$gt": since}}, {"_id": 0}):
+        k = a["identifier"]
+        if k.startswith("user:"):
+            u = await db.users.find_one({"id": k[5:]}, {"_id": 0, "id": 1})
+        elif k.startswith("adm:"):
+            _, iid, adm = k.split(":", 2)
+            u = await _find_student_by_admission(iid, adm)
+        elif k.startswith("phone:"):
+            u = await db.users.find_one({"role": "parent", "phone": k[6:]}, {"_id": 0, "id": 1})
+        else:
+            u = await db.users.find_one({"email": k}, {"_id": 0, "id": 1})
+        if not u or u["id"] in seen:
+            continue
+        try:
+            t = await _lock_target(user, u["id"])
+        except HTTPException:
+            continue
+        seen.add(t["id"])
+        lock = await _active_lock(await _account_lock_keys(t))
+        if lock:
+            out.append({"user_id": t["id"], "name": t.get("name"), "role": t.get("role"), **lock})
+    return {"locks": out}
+
+
+@api.get("/account-locks/{uid}")
+async def get_account_lock(uid: str, user: dict = Depends(get_current_user)):
+    t = await _lock_target(user, uid)
+    lock = await _active_lock(await _account_lock_keys(t))
+    return {"user_id": t["id"], "locked": bool(lock), **(lock or {})}
+
+
+@api.post("/account-locks/{uid}/unlock")
+async def unlock_account(uid: str, user: dict = Depends(get_current_user)):
+    t = await _lock_target(user, uid)
+    r = await db.login_attempts.delete_many({"identifier": {"$in": await _account_lock_keys(t)}})
+    await audit(user, "unlock_account", "user", t["id"], t.get("name"), institution_id=t.get("institution_id"))
+    return {"ok": True, "user_id": t["id"], "cleared": r.deleted_count}
 
 
 @api.post("/auth/logout")
@@ -4779,6 +4905,99 @@ async def public_login_background(code: str):
 async def public_login_default_bg():
     return Response(content=LOGIN_DEFAULT_BG.read_bytes(), media_type="image/jpeg",
                     headers={"Cache-Control": "public, max-age=86400"})
+
+
+BRAND_DIR = ROOT_DIR / "static" / "brand"
+BRAND_ASSETS = {p.name for p in BRAND_DIR.iterdir()} if BRAND_DIR.exists() else set()
+BRAND_TYPES = {"image/png", "image/jpeg", "image/webp", "image/svg+xml"}
+BRAND_MAX = 10 * 1024 * 1024
+_brand_cache: dict = {}
+
+
+def _brand_media(name: str) -> str:
+    return {"svg": "image/svg+xml", "ico": "image/x-icon"}.get(name.rsplit(".", 1)[-1], "image/png")
+
+
+async def _platform_branding():
+    return await db.platform_settings.find_one({"id": "branding"}, {"_id": 0}) or {}
+
+
+@api.get("/public/platform-brand/{name}")
+async def public_platform_brand(name: str):
+    """Current LNMO platform logo/icon asset (uploaded version, else the bundled default)."""
+    if name not in BRAND_ASSETS:
+        raise HTTPException(status_code=404, detail="Not found")
+    s = await _platform_branding()
+    path = (s.get("assets") or {}).get(name)
+    data = None
+    if path:
+        key = (s.get("version"), name)
+        data = _brand_cache.get(key)
+        if data is None:
+            try:
+                data, _ = _get_object(path)
+                _brand_cache[key] = data
+            except Exception:
+                data = None
+    if data is None:
+        data = (BRAND_DIR / name).read_bytes()
+    return Response(content=data, media_type=_brand_media(name), headers={"Cache-Control": "public, max-age=300"})
+
+
+def _branding_out(s: dict):
+    v = s.get("version") or 0
+    return {"version": v, "uploaded": bool(s.get("assets")), "updated_at": s.get("updated_at"),
+            "updated_by": s.get("updated_by"), "original_name": s.get("original_name"),
+            "assets": {n: f"/api/public/platform-brand/{n}?v={v}" for n in sorted(BRAND_ASSETS)}}
+
+
+@api.get("/platform/branding")
+async def get_platform_branding(user: dict = Depends(require_roles("platform_admin"))):
+    return _branding_out(await _platform_branding())
+
+
+@api.post("/platform/branding/logo")
+async def upload_platform_logo(file: UploadFile = File(...), user: dict = Depends(require_roles("platform_admin"))):
+    """Upload the LNMO logo; raster uploads are cleaned (transparent, trimmed) and the full icon set regenerated."""
+    if file.content_type not in BRAND_TYPES:
+        raise HTTPException(status_code=400, detail="Please upload a PNG, JPG, WebP or SVG image")
+    data = await file.read(BRAND_MAX + 1)
+    if len(data) > BRAND_MAX:
+        raise HTTPException(status_code=400, detail="Logo must be 10 MB or smaller")
+    ver = ((await _platform_branding()).get("version") or 0) + 1
+    if file.content_type == "image/svg+xml":
+        if b"<svg" not in data[:2048] or b"<script" in data.lower():
+            raise HTTPException(status_code=400, detail="That SVG file can't be used")
+        outputs = {"lnmo-mark.svg": data}
+    else:
+        from logo_processing import process_logo
+        try:
+            outputs = await asyncio.to_thread(process_logo, data)
+        except Exception as e:
+            logger.warning("platform logo processing failed: %s", e)
+            raise HTTPException(status_code=400, detail="Couldn't process that image — try a PNG with the logo on a plain white background")
+    try:
+        ext = (file.filename or "logo.png").rsplit(".", 1)[-1].lower()[:5]
+        _put_object(f"lnmo/platform-brand/v{ver}/original.{ext}", data, file.content_type)
+        assets = {n: _put_object(f"lnmo/platform-brand/v{ver}/{n}", b, _brand_media(n))["path"] for n, b in outputs.items()}
+    except Exception:
+        raise HTTPException(status_code=502, detail="Logo storage is unavailable right now — try again shortly")
+    prev = (await _platform_branding()).get("assets") or {}
+    keep = {} if file.content_type != "image/svg+xml" else {k: v for k, v in prev.items() if k != "lnmo-mark.svg"}
+    await db.platform_settings.update_one({"id": "branding"}, {"$set": {
+        "id": "branding", "version": ver, "assets": {**keep, **assets}, "original_name": file.filename,
+        "updated_at": now_iso(), "updated_by": user.get("email")}}, upsert=True)
+    await audit(user, "platform_logo_upload", "platform_branding", "branding", f"v{ver} · {file.filename}")
+    return _branding_out(await _platform_branding())
+
+
+@api.delete("/platform/branding/logo")
+async def reset_platform_logo(user: dict = Depends(require_roles("platform_admin"))):
+    s = await _platform_branding()
+    await db.platform_settings.update_one({"id": "branding"}, {"$set": {"id": "branding", "assets": {}, "version": (s.get("version") or 0) + 1,
+                                                                        "updated_at": now_iso(), "updated_by": user.get("email")}}, upsert=True)
+    await audit(user, "platform_logo_reset", "platform_branding", "branding", "default")
+    return _branding_out(await _platform_branding())
 
 
 @api.get("/institution/login-page")

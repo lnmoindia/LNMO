@@ -1,0 +1,28 @@
+{
+  "summary": "Platform logo branding (replace LNMO 'L' tile with user logo) end-to-end verified. All 24 pytests in test_platform_branding.py pass: public /api/public/platform-brand/{favicon.ico, lnmo-logo@2x.png, lnmo-mark.svg, icon-192.png, apple-touch-icon.png, lnmo-logo.png, lnmo-mark.png, icon-512.png, icon-maskable-512.png} return 200 with correct content-types; unknown name 404; unauth GET/POST/DELETE on /api/platform/branding* return 401; Sunrise admin (non-platform) returns 403 on all three; invalid type (text/plain), >10MB payload, and SVG containing <script> are all 400; platform admin GET returns version/assets; POST with src_app_icon.png bumps version; DELETE resets to defaults; final re-upload persists so user's logo is live. Frontend verified (desktop 1440 + mobile 390): Platform Settings page has platform-branding-card with upload button, reset button, file input, and preview; sidebar-lnmo-mark on platform console; login-lnmo-mark on generic /login desktop; login-lnmo-logo-mobile on generic /login mobile; branded /login/sunrise shows school logo + 'Powered by [mark] LNMO' footer (login-powered-by) + password eye toggle (Phase 55 regression intact); aarav SPS-001 at /login/sunrise still logs in to /portal/dashboard; parent.menon logs in to /parents/home with portal-powered-by + Sunrise school logo visible; teacher lakshmi lands on /teacher/dashboard with sidebar-powered-by visible; manifest.json returns 200 with icons array; LNMO_Product_Guide.pdf returns 200 (application/pdf, >10KB). Final GET /api/platform/branding = version 5, uploaded=true, original_name=src_app_icon.png — user's logo is active at end as required.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_platform_branding.py",
+    "/app/test_reports/pytest/branding_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "backend/server.py still >13000 lines (noted in iteration_39) — branding endpoints added in the same file; a modularisation refactor (auth, students, branding, locks) remains advisable.",
+    "logo_processing.py handles tile+shadow removal server-side — no concerns observed on the user's PNG (processed cleanly, favicon/apple-touch/mask icons generated); recommend wrapping heavy PIL operations in a background task if upload latency becomes user-visible (current cold path ~2s on preview)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_platform_branding.py (new)"
+  ],
+  "success_rate": {"backend": "100% (24/24)", "frontend": "100%"},
+  "test_credentials": "Platform lnmopvt@gmail.com / Lnmo@2026!; Sunrise admin@sunrise-demo.in / Sunrise@2026; aarav SPS-001 / Sunrise@2026; parent.menon@sunrise-demo.in / Sunrise@2026; lakshmi@sunrise-demo.in / Sunrise@2026.",
+  "seed_data_creation": "None. Branding reset performed during tests, then user's logo re-uploaded (version 5, src_app_icon.png) as the final state per instruction.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Platform branding is production-ready. Public URLs are versioned (?v=N) so frontend caches invalidate on upload. test_platform_branding.py is the regression file for the whole feature. The 10MB cap is enforced server-side (test_too_large_400). SVG script sanitation rejects <script> tags (test_svg_script_rejected_400). Branded portals correctly keep school logo while showing 'Powered by LNMO' using the uploaded platform mark.",
+  "rca of the issue": "N/A — no issues found."
+}
