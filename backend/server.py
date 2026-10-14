@@ -59,9 +59,10 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def make_tokens(user):
-    access = jwt.encode({"sub": user["id"], "role": user["role"], "type": "access",
+    tv = user.get("tv", 0)  # session version: bumping it revokes every outstanding token
+    access = jwt.encode({"sub": user["id"], "role": user["role"], "type": "access", "tv": tv,
                          "exp": datetime.now(timezone.utc) + timedelta(hours=24)}, JWT_SECRET, algorithm=ALGO)
-    refresh = jwt.encode({"sub": user["id"], "type": "refresh",
+    refresh = jwt.encode({"sub": user["id"], "type": "refresh", "tv": tv,
                           "exp": datetime.now(timezone.utc) + timedelta(days=7)}, JWT_SECRET, algorithm=ALGO)
     return access, refresh
 
@@ -107,6 +108,8 @@ async def get_current_user(request: Request) -> dict:
     user = await db.users.find_one({"id": payload["sub"]})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if payload.get("tv", 0) != user.get("tv", 0):
+        raise HTTPException(status_code=401, detail="Session expired — please sign in again")
     return user
 
 
@@ -452,8 +455,8 @@ async def refresh_token(request: Request, response: Response):
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid token type")
     user = await db.users.find_one({"id": payload["sub"]})
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
+    if not user or payload.get("tv", 0) != user.get("tv", 0):
+        raise HTTPException(status_code=401, detail="Session expired — please sign in again")
     access, refresh = make_tokens(user)
     set_auth_cookies(response, access, refresh)
     return {"message": "refreshed"}
@@ -6388,12 +6391,12 @@ class EmailSendError(Exception):
         self.reason = reason  # "undeliverable" | "provider_error"
 
 
-async def send_email(*, to: str, subject: str, html: str) -> str | None:
+async def send_email(*, to: str, subject: str, html: str, from_name: str | None = None) -> str | None:
     _assert_safe_email(subject, html)
     if not EMAIL_KEY:
         logger.warning("EMERGENT_EMAIL_KEY not set — email not sent")
         return None
-    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    payload = {"to": [to], "subject": subject, "html": html, "from_name": from_name or EMAIL_FROM_NAME}
     try:
         # Short timeout so an OTP request can never hang behind a slow provider (proxy would 5xx).
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -6403,7 +6406,8 @@ async def send_email(*, to: str, subject: str, html: str) -> str | None:
         return resp.json().get("id")
     except httpx.HTTPStatusError as e:
         body = (e.response.text or "").lower()
-        reason = "undeliverable" if (e.response.status_code == 422 or "undeliver" in body) else "provider_error"
+        reason = ("undeliverable" if (e.response.status_code == 422 or "undeliver" in body)
+                  else "rate_limited" if (e.response.status_code == 429 or "rate" in body) else "provider_error")
         logger.error("Email send failed (%s): %s", reason, body[:200])
         raise EmailSendError(reason)
     except Exception as e:  # noqa: BLE001
@@ -13730,6 +13734,553 @@ async def _fees_indexes():
     asyncio.create_task(_fee_reminder_loop())
 
 
+# ---------------- Phase 56: Platform Manager institution console ----------------
+RESET_TTL_HOURS = 24
+PW_RULE = "Use at least 8 characters with an uppercase letter, a lowercase letter and a number."
+SUPPORT_FROM = "LNMO Support"
+INST_STATUSES = ("active", "suspended", "inactive")
+
+
+def _pw_strong(p: str) -> bool:
+    return 8 <= len(p or "") <= 128 and bool(re.search(r"[A-Z]", p) and re.search(r"[a-z]", p) and re.search(r"\d", p))
+
+
+def _iso_days_ago(n: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=n)).isoformat()
+
+
+def _month_start() -> str:
+    return datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def _support_contact() -> str:
+    return os.environ.get("SUPPORT_EMAIL") or os.environ.get("PLATFORM_ADMIN_EMAIL") or "LNMO Support"
+
+
+async def _plat_inst(iid: str) -> dict:
+    inst = await db.institutions.find_one({"id": iid}, {"_id": 0})
+    if not inst:
+        raise HTTPException(status_code=404, detail="Institution not found")
+    return inst
+
+
+async def _plan_info(inst: dict) -> dict:
+    plan = await db.plans.find_one({"id": inst["plan_id"]}, {"_id": 0}) if inst.get("plan_id") else None
+    ov = inst.get("plan_overrides") or {}
+    q = (inst.get("comm") or {}).get("quota") or {}
+    return {
+        "plan": plan, "overrides": ov, "status": inst.get("status") or "active", "expires_at": inst.get("plan_expires_at"),
+        "limits": {"students": ov.get("max_students") or (plan or {}).get("max_students"),
+                   "whatsapp": (q.get("whatsapp") or {}).get("limit"), "sms": (q.get("sms") or {}).get("limit"),
+                   "ai_messages_month": ov.get("ai_messages_month")},
+        "quota_used": {"whatsapp": (q.get("whatsapp") or {}).get("used", 0), "sms": (q.get("sms") or {}).get("used", 0)},
+        "cycle_start": (inst.get("comm") or {}).get("cycle_start"),
+    }
+
+
+async def _logins_by_day(match: dict, days: int = 30) -> list:
+    rows = await db.audit_logs.aggregate([
+        {"$match": {**match, "action": "login", "timestamp": {"$gte": _iso_days_ago(days)}}},
+        {"$group": {"_id": {"$substr": ["$timestamp", 0, 10]}, "n": {"$sum": 1}, "u": {"$addToSet": "$actor_email"}}},
+    ]).to_list(400)
+    by = {r["_id"]: r for r in rows}
+    out = []
+    for i in range(days - 1, -1, -1):
+        d = (datetime.now(timezone.utc) - timedelta(days=i)).date().isoformat()
+        out.append({"date": d, "logins": by.get(d, {}).get("n", 0), "users": len(by.get(d, {}).get("u", []))})
+    return out
+
+
+async def _active_users(match: dict, days: int) -> int:
+    return len(await db.audit_logs.distinct("actor_email", {**match, "action": "login", "timestamp": {"$gte": _iso_days_ago(days)},
+                                                           "actor_role": {"$ne": "platform_admin"}}))
+
+
+@api.get("/platform/summary")
+async def platform_summary(user: dict = Depends(require_roles("platform_admin"))):
+    ms = _month_start()
+    return {
+        "schools": await db.institutions.count_documents({}),
+        "active_schools": await db.institutions.count_documents({"status": {"$in": ["active", None]}}),
+        "students": await db.students.count_documents({}),
+        "teachers": await db.users.count_documents({"role": "teacher"}),
+        "active_users_7d": await _active_users({}, 7),
+        "open_issues": await db.issues.count_documents({"status": "open"}),
+        "messages_month": await db.messages.count_documents({"created_at": {"$gte": ms}}),
+        "logins_trend": await _logins_by_day({"actor_role": {"$ne": "platform_admin"}}, 30),
+        "recent_activity": await db.audit_logs.find({}, {"_id": 0}).sort("timestamp", -1).to_list(6),
+    }
+
+
+@api.get("/platform/institutions-list")
+async def platform_institutions_list(user: dict = Depends(require_roles("platform_admin"))):
+    plans = {p["id"]: p for p in await db.plans.find({}, {"_id": 0}).to_list(100)}
+    stu = {r["_id"]: r["n"] for r in await db.students.aggregate([{"$group": {"_id": "$institution_id", "n": {"$sum": 1}}}]).to_list(1000)}
+    tch = {r["_id"]: r["n"] for r in await db.users.aggregate([{"$match": {"role": "teacher"}}, {"$group": {"_id": "$institution_id", "n": {"$sum": 1}}}]).to_list(1000)}
+    out = []
+    async for i in db.institutions.find({}, {"_id": 0}):
+        p = plans.get(i.get("plan_id")) or {}
+        out.append({"id": i["id"], "name": i.get("name"), "code": i.get("code"), "city": i.get("city"), "domain": i.get("domain"),
+                    "status": i.get("status") or "active", "plan_id": i.get("plan_id"), "plan_name": p.get("name"),
+                    "students": stu.get(i["id"], 0), "teachers": tch.get(i["id"], 0), "created_at": i.get("created_at"),
+                    "logo_url": _login_branding(i)["logo_url"], "is_demo": bool(i.get("is_demo"))})
+    return {"items": out, "plans": [{"id": p["id"], "name": p.get("name")} for p in plans.values()]}
+
+
+@api.get("/platform/institutions/{iid}/overview")
+async def platform_inst_overview(iid: str, user: dict = Depends(require_roles("platform_admin"))):
+    inst = await _plat_inst(iid)
+
+    async def cnt(col, q=None):
+        return await db[col].count_documents({"institution_id": iid, **(q or {})})
+    ay = await db.academic_years.find_one({"institution_id": iid, "status": "active"}, {"_id": 0, "name": 1, "start_date": 1, "end_date": 1}) \
+        or await db.academic_years.find_one({"institution_id": iid}, {"_id": 0, "name": 1, "start_date": 1, "end_date": 1}, sort=[("start_date", -1)])
+    units = await db.academic_units.find({"institution_id": iid}, {"_id": 0, "name": 1, "code": 1}).to_list(50)
+    counts = {c: await cnt(c) for c in ("classes", "sections", "subjects", "students", "fee_structures", "timetable_entries", "teacher_assignments")}
+    counts["teachers"] = await cnt("users", {"role": "teacher"})
+    counts["parents"] = await cnt("users", {"role": "parent"})
+    steps = [("School profile (contact email + phone)", bool(inst.get("contact_email") and inst.get("phone"))),
+             ("Academic configuration", bool(await db.academic_configuration.find_one({"institution_id": iid}, {"_id": 1}))),
+             ("Academic year", bool(ay)), ("Divisions", bool(units)), ("Classes", counts["classes"] > 0),
+             ("Sections", counts["sections"] > 0), ("Subjects", counts["subjects"] > 0), ("Teachers", counts["teachers"] > 0),
+             ("Teacher assignments", counts["teacher_assignments"] > 0), ("Students", counts["students"] > 0),
+             ("Fee structures", counts["fee_structures"] > 0), ("Timetable", counts["timetable_entries"] > 0)]
+    plan = await _plan_info(inst)
+    return {
+        "institution": {k: inst.get(k) for k in ("id", "name", "code", "slug", "domain", "city", "address", "contact_email", "phone",
+                                                 "created_at", "is_demo", "portal_name")},
+        "branding": _login_branding(inst), "status": plan["status"],
+        "plan": {"id": (plan["plan"] or {}).get("id"), "name": (plan["plan"] or {}).get("name"), "expires_at": plan["expires_at"]},
+        "academic_year": ay, "divisions": units, "counts": counts,
+        "login_key": inst.get("slug") or (inst.get("code") or "").lower() or inst.get("domain"),
+        "setup": {"steps": [{"label": a, "done": b} for a, b in steps], "done": sum(1 for _, b in steps if b), "total": len(steps)},
+    }
+
+
+@api.get("/platform/institutions/{iid}/analytics")
+async def platform_inst_analytics(iid: str, user: dict = Depends(require_roles("platform_admin"))):
+    inst = await _plat_inst(iid)
+    ms, m = _month_start(), {"institution_id": iid}
+    roles = {r["_id"]: r["n"] for r in await db.users.aggregate([{"$match": m}, {"$group": {"_id": "$role", "n": {"$sum": 1}}}]).to_list(20)}
+    pay = await db.fee_payments.aggregate([{"$match": {**m, "reversed": {"$ne": True}, "recorded_at": {"$gte": ms}}},
+                                           {"$group": {"_id": None, "n": {"$sum": 1}, "amt": {"$sum": "$amount"}}}]).to_list(1)
+    msgs = await db.messages.aggregate([{"$match": {**m, "created_at": {"$gte": ms}}},
+                                        {"$group": {"_id": {"c": "$channel", "s": "$status"}, "n": {"$sum": 1}}}]).to_list(50)
+    by_ch: dict = {}
+    for r in msgs:
+        ch = by_ch.setdefault(r["_id"].get("c") or "other", {"total": 0, "by_status": {}})
+        ch["total"] += r["n"]
+        ch["by_status"][r["_id"].get("s") or "unknown"] = r["n"]
+    plan = await _plan_info(inst)
+    provider = ((await db.platform_config.find_one({"id": "singleton"}, {"_id": 0, "active_provider": 1})) or {}).get("active_provider", "stub")
+    return {
+        "people": {"students": await db.students.count_documents(m), "teachers": roles.get("teacher", 0),
+                   "parents": roles.get("parent", 0), "admins": roles.get("institution_admin", 0), "student_logins": roles.get("student", 0)},
+        "active_users": {"d7": await _active_users(m, 7), "d30": await _active_users(m, 30)},
+        "logins_trend": await _logins_by_day(m, 30),
+        "modules": {
+            "attendance_days_month": len(await db.attendance.distinct("date", {**m, "date": {"$gte": ms[:10]}})),
+            "attendance_registers_month": await db.attendance.count_documents({**m, "date": {"$gte": ms[:10]}}),
+            "homework_month": await db.homework.count_documents({**m, "created_at": {"$gte": ms}}),
+            "homework_total": await db.homework.count_documents(m),
+            "exams_published": await db.exams.count_documents({**m, "published_at": {"$nin": [None, ""]}}),
+            "exams_total": await db.exams.count_documents(m),
+            "fee_collections_month": {"count": pay[0]["n"] if pay else 0, "amount": pay[0]["amt"] if pay else 0},
+            "ai_tutor_questions_month": await db.tutor_messages.count_documents({**m, "role": "user", "created_at": {"$gte": ms}}),
+            "ai_tutor_students_month": len(await db.tutor_messages.distinct("student_id", {**m, "role": "user", "created_at": {"$gte": ms}})),
+            "ai_tokens": None,
+            "storage_bytes": None,
+        },
+        "messages": {"month": by_ch, "quota_limits": {"whatsapp": plan["limits"]["whatsapp"], "sms": plan["limits"]["sms"]},
+                     "quota_used": plan["quota_used"], "cycle_start": plan["cycle_start"], "provider": provider},
+        "not_tracked": ["ai_tokens", "storage_bytes"],
+    }
+
+
+@api.get("/platform/institutions/{iid}/plan")
+async def platform_inst_plan(iid: str, user: dict = Depends(require_roles("platform_admin"))):
+    inst = await _plat_inst(iid)
+    info = await _plan_info(inst)
+    ms = _month_start()
+    info["usage"] = {"students": await db.students.count_documents({"institution_id": iid}), **info.pop("quota_used"),
+                     "ai_messages_month": await db.tutor_messages.count_documents({"institution_id": iid, "role": "user", "created_at": {"$gte": ms}})}
+    info["plans"] = await db.plans.find({}, {"_id": 0}).to_list(100)
+    return info
+
+
+class PlanUpdate(BaseModel):
+    plan_id: Optional[str] = None
+    max_students: Optional[int] = PField(None, ge=0)
+    whatsapp_limit: Optional[int] = PField(None, ge=0)
+    sms_limit: Optional[int] = PField(None, ge=0)
+    ai_messages_month: Optional[int] = PField(None, ge=0)
+    status: Optional[Literal["active", "suspended", "inactive"]] = None
+    expires_at: Optional[str] = None
+
+
+@api.put("/platform/institutions/{iid}/plan")
+async def platform_inst_plan_update(iid: str, body: PlanUpdate, user: dict = Depends(require_roles("platform_admin"))):
+    inst = await _plat_inst(iid)
+    if body.plan_id and not await db.plans.find_one({"id": body.plan_id}, {"_id": 1}):
+        raise HTTPException(status_code=400, detail="Unknown plan")
+    if body.expires_at:
+        try:
+            datetime.fromisoformat(body.expires_at[:10])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Expiry must be a date (YYYY-MM-DD)")
+    sets = {"plan_id": body.plan_id or None, "plan_expires_at": (body.expires_at or "")[:10] or None,
+            "plan_overrides": {"max_students": body.max_students, "ai_messages_month": body.ai_messages_month}}
+    if body.status:
+        sets["status"] = body.status
+    q = (inst.get("comm") or {}).get("quota") or {}
+    for ch, v in (("whatsapp", body.whatsapp_limit), ("sms", body.sms_limit)):
+        if v is not None:
+            sets[f"comm.quota.{ch}.limit"] = v
+            sets.setdefault(f"comm.quota.{ch}.used", (q.get(ch) or {}).get("used", 0))
+    await db.institutions.update_one({"id": iid}, {"$set": sets})
+    plan = await db.plans.find_one({"id": body.plan_id}, {"_id": 0, "name": 1}) if body.plan_id else None
+    await audit(user, "platform_plan_update", "institutions", iid,
+                f"{inst.get('name')} · plan={(plan or {}).get('name') or 'none'} · status={body.status or inst.get('status')} · "
+                f"expires={sets['plan_expires_at'] or '—'} · students={body.max_students or 'plan'} · wa={body.whatsapp_limit} · "
+                f"sms={body.sms_limit} · ai={body.ai_messages_month}", institution_id=iid)
+    return await platform_inst_plan(iid, user)
+
+
+async def _inst_admin(iid: str, uid: str) -> dict:
+    u = await db.users.find_one({"id": uid, "institution_id": iid, "role": "institution_admin"}, {"_id": 0, "password_hash": 0})
+    if not u:
+        raise HTTPException(status_code=404, detail="School admin not found")
+    return u
+
+
+@api.get("/platform/institutions/{iid}/admins")
+async def platform_inst_admins(iid: str, user: dict = Depends(require_roles("platform_admin"))):
+    await _plat_inst(iid)
+    out = []
+    async for u in db.users.find({"institution_id": iid, "role": "institution_admin"}, {"_id": 0, "password_hash": 0}).sort("name", 1):
+        last = await db.audit_logs.find_one({"actor_email": u.get("email"), "action": "login"}, {"_id": 0, "timestamp": 1}, sort=[("timestamp", -1)])
+        reset = await db.password_resets.find_one({"user_id": u["id"], "used_at": None, "invalidated_at": None,
+                                                   "expires_at": {"$gt": now_iso()}}, {"_id": 0, "expires_at": 1, "created_at": 1})
+        out.append({"id": u["id"], "name": u.get("name"), "email": u.get("email"), "status": u.get("status") or "active",
+                    "created_at": u.get("created_at"), "last_login": (last or {}).get("timestamp"),
+                    "lock": await _active_lock(await _account_lock_keys(u)), "pending_reset": reset})
+    return {"admins": out}
+
+
+async def _support_send(to: str, subject: str, html: str) -> str | None:
+    """LNMO Support email; retries briefly (2s, 6s) when the provider throttles us."""
+    for delay in (2, 6, None):
+        try:
+            return await send_email(to=to, subject=subject, html=html, from_name=SUPPORT_FROM)
+        except EmailSendError as e:
+            if e.reason != "rate_limited" or delay is None:
+                raise
+            await asyncio.sleep(delay)
+
+
+EMAIL_ERR_COPY = {"rate_limited": "the email provider is throttling us, try again in a minute",
+                  "undeliverable": "the address can't receive email", "email_not_configured": "email isn't configured",
+                  "provider_error": "the email provider returned an error"}
+
+
+def _support_email_html(title: str, lines: list, cta: tuple | None = None) -> str:
+    body = "".join(f'<p style="margin:0 0 12px">{x}</p>' for x in lines)
+    btn = (f'<p style="margin:20px 0"><a href="{_html_escape(cta[1])}" style="background:#4338ca;color:#fff;padding:12px 20px;'
+           f'border-radius:8px;text-decoration:none;font-weight:bold">{_html_escape(cta[0])}</a></p>'
+           f'<p style="font-size:12px;color:#666;word-break:break-all">Or paste this link into your browser: {_html_escape(cta[1])}</p>') if cta else ""
+    return (f'<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif;color:#111;font-size:14px;line-height:1.5">'
+            f'<h2 style="margin:0 0 16px;font-size:18px">{_html_escape(title)}</h2>{body}{btn}'
+            f'<p style="font-size:12px;color:#888;margin-top:24px">Sent by {SUPPORT_FROM}. Questions? Contact {_html_escape(_support_contact())}.</p>'
+            f'</td></tr></table>')
+
+
+@api.post("/platform/institutions/{iid}/admins/{uid}/password-reset")
+async def platform_admin_password_reset(iid: str, uid: str, user: dict = Depends(require_roles("platform_admin"))):
+    inst = await _plat_inst(iid)
+    target = await _inst_admin(iid, uid)
+    base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+    if not base.startswith("https://"):
+        raise HTTPException(status_code=500, detail="PUBLIC_BASE_URL is not configured — can't build the reset link")
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    await db.password_resets.update_many({"user_id": uid, "used_at": None, "invalidated_at": None}, {"$set": {"invalidated_at": now.isoformat()}})
+    doc = {"id": str(uuid.uuid4()), "user_id": uid, "institution_id": iid, "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+           "created_at": now.isoformat(), "expires_at": (now + timedelta(hours=RESET_TTL_HOURS)).isoformat(),
+           "created_by": user.get("email"), "used_at": None, "invalidated_at": None, "message_id": None}
+    await db.password_resets.insert_one(doc)
+    link = f"{base}/reset-password/{token}"
+    html = _support_email_html("Reset your LNMO password", [
+        f"Hello {_html_escape(target.get('name') or '')},",
+        f"LNMO Support has sent you a link to set a new password for your {_html_escape(inst.get('name') or '')} admin account "
+        f"({_html_escape(target['email'])}).",
+        f"The link works once and expires in {RESET_TTL_HOURS} hours. Setting a new password signs you out on all devices.",
+        "If you didn't expect this, you can ignore this email — your current password keeps working."], ("Set a new password", link))
+    try:
+        mid = await _support_send(target["email"], "Reset your LNMO password", html)
+    except EmailSendError as e:
+        mid, err = None, e.reason
+    else:
+        err = None if mid else "email_not_configured"
+    if not mid:
+        await db.password_resets.update_one({"id": doc["id"]}, {"$set": {"invalidated_at": now_iso(), "send_error": err}})
+        await audit(user, "password_reset_email_failed", "users", uid, f"{target['email']} · {err}", institution_id=iid)
+        raise HTTPException(status_code=502, detail=f"The reset email could not be sent: {EMAIL_ERR_COPY.get(err, err)}. No link is active — nothing was sent.")
+    await db.password_resets.update_one({"id": doc["id"]}, {"$set": {"message_id": mid}})
+    await audit(user, "password_reset_sent", "users", uid, f"{target['email']} · message {mid}", institution_id=iid)
+    return {"ok": True, "sent_to": target["email"], "message_id": mid, "expires_at": doc["expires_at"]}
+
+
+class EmailChange(BaseModel):
+    email: EmailStr
+
+
+@api.post("/platform/institutions/{iid}/admins/{uid}/email")
+async def platform_admin_change_email(iid: str, uid: str, body: EmailChange, user: dict = Depends(require_roles("platform_admin"))):
+    await _plat_inst(iid)
+    target = await _inst_admin(iid, uid)
+    old, new = (target.get("email") or "").lower(), str(body.email).strip().lower()
+    if new == old:
+        raise HTTPException(status_code=400, detail="That's already the login email")
+    if await db.users.find_one({"email": new}, {"_id": 1}):
+        raise HTTPException(status_code=409, detail="That email is already used by another account")
+    try:
+        await db.users.update_one({"id": uid}, {"$set": {"email": new, "email_changed_at": now_iso()}})
+    except DuplicateKeyError:
+        raise HTTPException(status_code=409, detail="That email is already used by another account")
+    await db.login_attempts.delete_many({"identifier": old})
+    html = _support_email_html("Your LNMO login email was changed", [
+        f"Your LNMO login email was changed from <b>{_html_escape(old)}</b> to <b>{_html_escape(new)}</b> by LNMO Support.",
+        "Use the new address to sign in from now on. Your password hasn't changed.",
+        f"If this wasn't expected, contact {_html_escape(_support_contact())} straight away."])
+    results = {}
+    for addr in dict.fromkeys([old, new]):
+        try:
+            mid = await _support_send(addr, "Your LNMO login email was changed", html)
+            results[addr] = {"message_id": mid} if mid else {"error": "email_not_configured"}
+        except EmailSendError as e:
+            results[addr] = {"error": e.reason}
+    await audit(user, "admin_email_change", "users", uid,
+                f"{old} → {new} · " + ", ".join(f"{a}: {r.get('message_id') or r.get('error')}" for a, r in results.items()), institution_id=iid)
+    return {"ok": True, "email": new, "notifications": results}
+
+
+@api.get("/platform/institutions/{iid}/activity")
+async def platform_inst_activity(iid: str, platform_only: bool = False, limit: int = 50,
+                                 user: dict = Depends(require_roles("platform_admin"))):
+    await _plat_inst(iid)
+    q: dict = {"$or": [{"institution_id": iid}, {"entity_id": iid}]}
+    if platform_only:
+        q["actor_role"] = "platform_admin"
+    items = await db.audit_logs.find(q, {"_id": 0}).sort("timestamp", -1).to_list(min(max(limit, 1), 200))
+    return {"items": items}
+
+
+async def _reset_doc(token: str, consume: bool = False):
+    h = hashlib.sha256((token or "").encode()).hexdigest()
+    if consume:
+        d = await db.password_resets.find_one_and_update(
+            {"token_hash": h, "used_at": None, "invalidated_at": None, "expires_at": {"$gt": now_iso()}},
+            {"$set": {"used_at": now_iso()}}, return_document=True)
+        if d:
+            return d
+    d = await db.password_resets.find_one({"token_hash": h}, {"_id": 0})
+    if not d or d.get("invalidated_at"):
+        raise HTTPException(status_code=410, detail="This reset link is no longer valid. Ask LNMO Support to send a new one.")
+    if d.get("used_at"):
+        raise HTTPException(status_code=410, detail="This reset link has already been used. Ask LNMO Support for a new one if you still need it.")
+    if d["expires_at"] <= now_iso():
+        raise HTTPException(status_code=410, detail="This reset link has expired (links last 24 hours). Ask LNMO Support for a new one.")
+    if consume:
+        raise HTTPException(status_code=410, detail="This reset link is no longer valid.")
+    return d
+
+
+@api.get("/public/password-reset/{token}")
+async def public_password_reset_info(token: str):
+    d = await _reset_doc(token)
+    u = await db.users.find_one({"id": d["user_id"]}, {"_id": 0, "name": 1, "email": 1})
+    inst = await db.institutions.find_one({"id": d["institution_id"]}, {"_id": 0}) or {}
+    em = (u or {}).get("email") or ""
+    masked = (em[:2] + "•••" + em[em.find("@"):]) if "@" in em else ""
+    b = _login_branding(inst) if inst else {}
+    return {"name": ((u or {}).get("name") or "").split(" ")[0], "email_masked": masked, "expires_at": d["expires_at"],
+            "school": {"name": b.get("name"), "logo_url": b.get("logo_url"), "primary_color": inst.get("primary_color")},
+            "login_key": inst.get("slug") or (inst.get("code") or "").lower() or inst.get("domain"), "rule": PW_RULE}
+
+
+class ResetBody(BaseModel):
+    password: str
+
+
+@api.post("/public/password-reset/{token}")
+async def public_password_reset(token: str, body: ResetBody):
+    if not _pw_strong(body.password):
+        await _reset_doc(token)  # surface link errors first
+        raise HTTPException(status_code=400, detail=PW_RULE)
+    d = await _reset_doc(token, consume=True)
+    u = await db.users.find_one({"id": d["user_id"]})
+    if not u:
+        raise HTTPException(status_code=410, detail="This reset link is no longer valid.")
+    await db.users.update_one({"id": u["id"]}, {"$set": {"password_hash": hash_password(body.password), "must_change_password": False,
+                                                         "password_changed_at": now_iso()}, "$inc": {"tv": 1}})
+    await db.login_attempts.delete_many({"identifier": {"$in": await _account_lock_keys(u)}})
+    await db.password_resets.update_many({"user_id": u["id"], "used_at": None, "invalidated_at": None}, {"$set": {"invalidated_at": now_iso()}})
+    await audit(u, "password_reset_completed", "users", u["id"], u.get("email"), institution_id=u.get("institution_id"))
+    inst = await db.institutions.find_one({"id": u.get("institution_id")}, {"_id": 0, "slug": 1, "code": 1, "domain": 1}) or {}
+    return {"ok": True, "login_key": inst.get("slug") or (inst.get("code") or "").lower() or inst.get("domain")}
+
+
+# ---------------- Phase 57: production factory reset (platform manager, preview-blocked) ----------------
+import data_reset as _dr  # noqa: E402
+
+PREVIEW_DB_NAME = "test_database"  # the preview environment's DB_NAME at build time; production uses a different name
+RESET_PHRASE = "RESET PRODUCTION"
+RESET_WINDOW_MIN = 10
+RESET_BLOCKED_HOSTS = ("preview.emergentagent.com", "localhost", "127.0.0.1")
+_reset_tasks: dict = {}
+
+
+def reset_guard(request: Request) -> dict:
+    """Refuses on preview hosts or the preview database. Tests override this dependency explicitly."""
+    hosts = [(request.headers.get(h) or "").lower() for h in ("host", "x-forwarded-host", "origin", "referer")]
+    db_name = os.environ.get("DB_NAME", "")
+    if any(b in h for h in hosts for b in RESET_BLOCKED_HOSTS) or db_name == PREVIEW_DB_NAME:
+        raise HTTPException(status_code=409, detail="Reset is disabled on preview")
+    return {"host": hosts[0], "db": db_name}
+
+
+def _plan_public(plan):
+    return [{k: v for k, v in p.items() if k != "filter"} for p in plan]
+
+
+async def _reset_last_job():
+    return await db.platform_events.find_one({"type": "reset_job"}, {"_id": 0}, sort=[("started_at", -1)])
+
+
+@api.get("/platform/reset/preview")
+async def reset_preview(env: dict = Depends(reset_guard), user: dict = Depends(require_roles("platform_admin"))):
+    plan = await _dr.build_plan(db)
+    last = await db.platform_events.find_one({"type": "reset_job", "status": "completed"}, {"_id": 0}, sort=[("finished_at", -1)])
+    nxt = (datetime.fromisoformat(last["finished_at"]) + timedelta(hours=1)).isoformat() if last else None
+    return {"db": env["db"], "host": env["host"], "phrase": RESET_PHRASE, "plan": _plan_public(plan),
+            "totals": {"delete": sum(p["delete"] for p in plan), "keep": sum(p["total"] - p["delete"] for p in plan)},
+            "unclassified": [p["collection"] for p in plan if p["action"] == "unclassified"],
+            "last_job": await _reset_last_job(), "next_allowed_at": nxt if nxt and nxt > now_iso() else None}
+
+
+@api.post("/platform/reset/backup")
+async def reset_backup(env: dict = Depends(reset_guard), user: dict = Depends(require_roles("platform_admin"))):
+    plan = await _dr.build_plan(db)
+    blob, counts, paths = await _dr.build_backup(db, plan)
+    bid = str(uuid.uuid4())
+    path = f"lnmo/resets/{bid}.json.gz"
+    try:
+        await asyncio.to_thread(_put_object, path, blob, "application/gzip")
+    except Exception as e:
+        logger.error("reset backup upload failed: %s", e)
+        raise HTTPException(status_code=502, detail="Backup could not be stored — nothing was deleted. Try again.")
+    doc = {"type": "reset_backup", "id": bid, "path": path, "size": len(blob), "counts": counts, "storage_refs": len(paths),
+           "db": env["db"], "created_by": user["id"], "created_by_email": user.get("email"), "created_at": now_iso(), "used": False}
+    await db.platform_events.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return {**doc, "download_url": f"/api/platform/reset/backups/{bid}/download",
+            "valid_until": (datetime.now(timezone.utc) + timedelta(minutes=RESET_WINDOW_MIN)).isoformat()}
+
+
+@api.get("/platform/reset/backups/{bid}/download")
+async def reset_backup_download(bid: str, user: dict = Depends(require_roles("platform_admin"))):
+    b = await db.platform_events.find_one({"type": "reset_backup", "id": bid}, {"_id": 0})
+    if not b:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    data, _ = await asyncio.to_thread(_get_object, b["path"])
+    return Response(content=data, media_type="application/gzip",
+                    headers={"Content-Disposition": f'attachment; filename="lnmo-backup-{b["created_at"][:10]}-{bid[:8]}.json.gz"'})
+
+
+class ResetRun(BaseModel):
+    password: str
+    phrase: str
+    backup_id: str
+
+
+async def _reset_job(job_id: str):
+    job = await db.platform_events.find_one({"type": "reset_job", "id": job_id})
+    try:
+        if not job.get("final_backup_id"):
+            await db.platform_events.update_one({"id": job_id}, {"$set": {"stage": "backup", "heartbeat": now_iso()}})
+            plan = await _dr.build_plan(db)
+            blob, counts, paths = await _dr.build_backup(db, plan)
+            fid = str(uuid.uuid4())
+            await asyncio.to_thread(_put_object, f"lnmo/resets/{fid}.json.gz", blob, "application/gzip")
+            await db.platform_events.insert_one({"type": "reset_backup", "id": fid, "path": f"lnmo/resets/{fid}.json.gz", "size": len(blob),
+                                                 "counts": counts, "storage_refs": len(paths), "final_for_job": job_id,
+                                                 "created_by": job["started_by"], "created_at": now_iso(), "used": True})
+            await db.platform_events.update_one({"id": job_id}, {"$set": {"final_backup_id": fid, "storage_orphans": len(paths)}})
+        plan = await _dr.build_plan(db)
+        await db.platform_events.update_one({"id": job_id}, {"$set": {"stage": "deleting", "total_steps": len(plan)}})
+        for p in plan:
+            key = f"steps.{p['collection']}"
+            if p["delete"]:
+                n = await _dr.delete_step(db, p)
+                await db.platform_events.update_one({"id": job_id}, {"$inc": {f"{key}.deleted": n}, "$set": {
+                    f"{key}.action": p["action"], f"{key}.done": True, "heartbeat": now_iso()}})
+            else:
+                await db.platform_events.update_one({"id": job_id}, {"$set": {f"{key}.action": p["action"], f"{key}.done": True}})
+        final = await db.platform_events.find_one({"id": job_id}, {"_id": 0})
+        deleted = {c: s.get("deleted", 0) for c, s in (final.get("steps") or {}).items() if s.get("deleted")}
+        await db.platform_events.update_one({"id": job_id}, {"$set": {"status": "completed", "stage": "done", "finished_at": now_iso(),
+                                                                     "deleted_counts": deleted, "deleted_total": sum(deleted.values())}})
+        await db.platform_events.insert_one({"type": "reset_completed", "id": str(uuid.uuid4()), "job_id": job_id, "by": final["started_by_email"],
+                                             "at": now_iso(), "deleted_counts": deleted, "backup_id": final.get("backup_id"),
+                                             "final_backup_id": final.get("final_backup_id"), "storage_orphans": final.get("storage_orphans", 0)})
+        logger.warning("FACTORY RESET completed by %s: %s docs deleted", final["started_by_email"], sum(deleted.values()))
+    except Exception as e:
+        logger.exception("factory reset job %s failed", job_id)
+        await db.platform_events.update_one({"id": job_id}, {"$set": {"status": "failed", "error": str(e)[:300], "failed_at": now_iso()}})
+    finally:
+        _reset_tasks.pop(job_id, None)
+
+
+@api.post("/platform/reset/run", status_code=202)
+async def reset_run(body: ResetRun, env: dict = Depends(reset_guard), user: dict = Depends(require_roles("platform_admin"))):
+    if body.phrase.strip() != RESET_PHRASE:
+        raise HTTPException(status_code=400, detail=f'Type the exact phrase "{RESET_PHRASE}"')
+    fresh = await db.users.find_one({"id": user["id"]})
+    if not fresh or not verify_password(body.password, fresh["password_hash"]):
+        raise HTTPException(status_code=403, detail="Password is incorrect")
+    last = await _reset_last_job()
+    if last and last.get("status") in ("running", "failed"):  # resume an interrupted job
+        stale_cut = (datetime.now(timezone.utc) - timedelta(seconds=90)).isoformat()
+        if last["id"] in _reset_tasks or (last.get("status") == "running" and last.get("heartbeat", "") > stale_cut):
+            raise HTTPException(status_code=409, detail="A reset is already running")
+        await db.platform_events.update_one({"id": last["id"]}, {"$set": {"status": "running", "resumed_at": now_iso(), "heartbeat": now_iso()},
+                                                                 "$inc": {"resume_count": 1}})
+        _reset_tasks[last["id"]] = asyncio.create_task(_reset_job(last["id"]))
+        return {"job_id": last["id"], "resumed": True}
+    done = await db.platform_events.find_one({"type": "reset_job", "status": "completed",
+                                              "finished_at": {"$gt": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()}}, {"_id": 0})
+    if done:
+        raise HTTPException(status_code=429, detail="Only one reset per hour — try again later")
+    since = (datetime.now(timezone.utc) - timedelta(minutes=RESET_WINDOW_MIN)).isoformat()
+    b = await db.platform_events.find_one_and_update(
+        {"type": "reset_backup", "id": body.backup_id, "created_by": user["id"], "used": False, "created_at": {"$gt": since}},
+        {"$set": {"used": True, "used_at": now_iso()}})
+    if not b:
+        raise HTTPException(status_code=400, detail=f"Create a fresh backup first — a backup can be used once, within {RESET_WINDOW_MIN} minutes")
+    job = {"type": "reset_job", "id": str(uuid.uuid4()), "status": "running", "stage": "queued", "started_by": user["id"],
+           "started_by_email": user.get("email"), "started_at": now_iso(), "heartbeat": now_iso(), "backup_id": body.backup_id,
+           "db": env["db"], "host": env["host"], "steps": {}}
+    await db.platform_events.insert_one(dict(job))
+    _reset_tasks[job["id"]] = asyncio.create_task(_reset_job(job["id"]))
+    return {"job_id": job["id"], "resumed": False}
+
+
+@api.get("/platform/reset/status")
+async def reset_status(user: dict = Depends(require_roles("platform_admin"))):
+    return {"job": await _reset_last_job(),
+            "completed": await db.platform_events.find({"type": "reset_completed"}, {"_id": 0}).sort("at", -1).to_list(5)}
+
+
 app.include_router(api)
 
 
@@ -13750,6 +14301,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await db.users.create_index("email", unique=True)
+    await db.password_resets.create_index("token_hash")
     await db.users.create_index("institution_id")
     await db.login_attempts.create_index("identifier")
     await db.principal_assignments.create_index([("user_id", 1), ("institution_id", 1)])

@@ -3,6 +3,7 @@ import { ImageUp, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import api, { errText } from "../../lib/api";
 import { Button } from "../../components/ui/button";
+import DangerZoneCard from "./DangerZoneCard";
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const MAX = 10 * 1024 * 1024;
@@ -83,6 +84,7 @@ export default function PlatformSettings() {
         <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Platform-wide settings for LNMO.</p>
       </div>
       <BrandingCard />
+      <DangerZoneCard />
     </div>
   );
 }

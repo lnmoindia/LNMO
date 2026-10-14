@@ -747,3 +747,29 @@ User-confirmed rules: same-section default (8-A→9-A) with per-student override
 - Receipts, statements and other PDFs never showed LNMO, so they are unchanged.
 - Tests: iteration_39 (Phase 55) and iteration_40 (logo) both passed 100%.
 
+
+## Phase 56 (Oct 2026): Platform Manager console + admin password reset / email change
+- Dashboard (/platform/dashboard): 7 summary cards and a 30-day sign-in trend. Institutions list: search, plan and status filters, sortable columns, click a row to open the school.
+- Each school has a page at /platform/institutions/:id?tab=… with these tabs:
+  - Overview: key facts, login link and setup progress (12 steps).
+  - Analytics & Usage: AI tokens and storage show as "Not tracked".
+  - Plan: edit with a confirm step; changes are audited and saved on the institution as plan_id, plan_overrides, plan_expires_at and status, with message quotas stored in comm.quota.
+  - Admins: send password reset, change email, unlock.
+  - Also Domain & Access, Branding, AI & Features and Activity.
+- New endpoints (all platform_admin only): /api/platform/summary, /institutions-list, /institutions/{iid}/overview|analytics|plan (GET/PUT)|admins|activity, /institutions/{iid}/admins/{uid}/password-reset|email.
+- Public endpoints: GET/POST /api/public/password-reset/{token} and the page /reset-password/:token.
+- Reset links use a random token stored only as a sha256 hash. They expire after 24h, work once, and are cancelled when a newer one is issued. A completed reset bumps users.tv (included in JWTs) so all of that user's sessions are signed out, and clears the lockout.
+- Email goes through Emergent Resend (EMERGENT_EMAIL_KEY) as "LNMO Support". The real message id is shown, failures return 502 with the reason, and throttled sends are retried once.
+- Tests: tests/test_phase56_platform.py passes 5/5; iteration_41 passed 100%.
+- "Suspended" status is only a label for now; login doesn't block suspended schools.
+
+
+## Phase 57 (Oct 2026): Production factory reset (built, never run on preview)
+- Platform Manager → Settings → Danger zone (DangerZoneCard.jsx). Steps: dry run, then Create backup and download it, then type the password plus RESET PRODUCTION, then a background job with live progress.
+- Classification is in backend/data_reset.py (KEEP / PARTIAL / DELETE). Unknown collections are only cleared of documents that have institution_id. A test checks that every db.<collection> used in server.py is classified.
+- Guard (reset_guard dependency): returns 409 if the Host, X-Forwarded-Host, Origin or Referer contains preview.emergentagent.com, localhost or 127.0.0.1, or if DB_NAME equals PREVIEW_DB_NAME ("test_database").
+- Backups are gzipped Extended-JSON stored in object storage under lnmo/resets/<id>.json.gz. A backup can be used once and must be under 10 minutes old. The job takes a second, final backup just before it deletes anything.
+- Job state is kept in platform_events (type reset_job and reset_completed), so an interrupted job resumes from where it stopped. Limit is one reset per hour.
+- Files in object storage are not deleted (the storage API has no delete call). Their count is reported as storage_orphans.
+- Tests: tests/test_phase57_reset.py runs the reset only against a throwaway lnmo_reset_test_* database in a subprocess, then drops it. Preview data counts are unchanged. iteration_42 passed.
+

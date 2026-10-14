@@ -32,6 +32,7 @@ import HomeworkMonitor from "./pages/institution/HomeworkMonitor";
 import PlatformCommunication from "./pages/platform/PlatformCommunication";
 import PlatformLibrary from "./pages/platform/PlatformLibrary";
 import PlatformSettings from "./pages/platform/PlatformSettings";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
 import CommunicationPage from "./pages/institution/CommunicationPage";
 import StudentProfileView from "./pages/institution/StudentProfileView";
 import UsersPage from "./pages/institution/UsersPage";
@@ -116,6 +117,7 @@ function App() {
             <Route path="/access-denied" element={<AccessDeniedPage />} />
             <Route path="/setup/parent" element={<ParentSetupPage />} />
             <Route path="/fees/invoice/:token" element={<FeeLinkPage />} />
+            <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
             <Route path="/setup/parent/:token" element={<ParentSetupPage />} />
             <Route path="/change-password" element={<Protected><ChangePasswordPage /></Protected>} />
             <Route
