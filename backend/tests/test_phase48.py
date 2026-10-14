@@ -129,7 +129,7 @@ def test_generate_frequencies_idempotent_discounts(ctx):
     terms = [{"label": f"Term {i}", "due_date": D(30 + 60 * i)} for i in (1, 2, 3)]
     assert admin.post(url, json={"frequency": "term", "periods": terms}).json()["created"] == 12
     again = admin.post(url, json={"frequency": "term", "periods": terms}).json()
-    assert again == {"created": 0, "skipped_existing": 12}
+    assert {k: again[k] for k in ("created", "skipped_existing")} == {"created": 0, "skipped_existing": 12}  # + Phase 59 run fields
     t = lambda k: [i["total"] for i in db.fee_invoices.find({"student_id": ctx["sid"][k], "frequency": "term"})]  # noqa: E731
     assert t("s1") == [500, 500, 500]  # flat discount fully consumed by the annual invoice
     assert t("s3") == [450, 450, 450]  # percent applies to every invoice

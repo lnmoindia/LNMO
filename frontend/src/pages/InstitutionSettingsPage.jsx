@@ -8,6 +8,7 @@ import { Label } from "../components/ui/label";
 import { Skeleton } from "../components/ui/skeleton";
 import { UpiCard } from "./UpiSettingsCard";
 import { LoginPageCard } from "../components/settings/LoginPageCard";
+import { QuickRepliesSettingsCard } from "../components/chat/QuickReplies";
 
 const FIELDS = [
   { name: "name", label: "Institution name" },
@@ -218,6 +219,7 @@ export default function InstitutionSettingsPage() {
       <LoginPageCard />
       <SealCard />
       <UpiCard />
+      <QuickRepliesSettingsCard />
     </div>
   );
 }

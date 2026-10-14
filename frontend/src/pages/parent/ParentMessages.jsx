@@ -7,6 +7,7 @@ import { Button } from "../../components/ui/button";
 import { Textarea } from "../../components/ui/textarea";
 import { PCard, PEmpty } from "../portal/PortalShell";
 import ChatThread from "../../components/chat/ChatThread";
+import { useChatSocket } from "../../lib/chatSocket";
 
 const fullName = (c) => `${c?.first_name || ""} ${c?.last_name || ""}`.trim();
 
@@ -58,7 +59,8 @@ export default function ParentMessages({ kids }) {
   const [d, setD] = useState(null);
   const [composing, setComposing] = useState(false);
   const load = useCallback(() => { api.get("/chat/threads", { params: { status: "" } }).then((r) => setD(r.data)).catch(() => setD({ threads: [] })); }, []);
-  useEffect(() => { load(); const iv = setInterval(load, 15000); return () => clearInterval(iv); }, [load]);
+  const live = useChatSocket(useCallback((ev) => { if (ev.type === "unread" || ev.type === "message") load(); }, [load]));
+  useEffect(() => { load(); if (live === "live") return undefined; const iv = setInterval(load, 15000); return () => clearInterval(iv); }, [load, live]);
   const open = (id) => { const n = new URLSearchParams(sp); n.set("t", id); setSp(n); };
   const back = () => { const n = new URLSearchParams(sp); n.delete("t"); setSp(n); load(); };
 

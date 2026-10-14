@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import api from "../../lib/api";
+import { useChatSocket } from "../../lib/chatSocket";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { Bell, LogOut, Menu, MessageSquareWarning, Moon, Sun, UserCircle2 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
@@ -22,13 +23,16 @@ export default function PortalShell({ brand, label, nav, bottom, base, extra, qu
   const signOut = async () => { await logout(); navigate("/login"); };
   const hasMessages = nav.some((n) => n.key === "messages");
   const [unread, setUnread] = useState(0);
+  const [tick, setTick] = useState(0);
+  const onEv = useCallback((ev) => { if (ev.type === "unread") setTick((t) => t + 1); }, []);
+  useChatSocket(hasMessages ? onEv : null);
   useEffect(() => {
     if (!hasMessages) return undefined;
     const load = () => api.get("/chat/unread").then((r) => setUnread(r.data.unread || 0)).catch(() => {});
     load();
     const iv = setInterval(load, 30000);
     return () => clearInterval(iv);
-  }, [hasMessages, pathname]);
+  }, [hasMessages, pathname, tick]);
   return (
     <div className="min-h-screen bg-[#f6f7f9] dark:bg-[#0B0F17] flex" style={brandVars(brand.color)} data-testid={testid}>
       <aside className="hidden md:flex w-60 flex-col shrink-0 sticky top-0 h-screen bg-white dark:bg-slate-900 border-r border-slate-200/80 dark:border-slate-800" data-testid="portal-sidebar">

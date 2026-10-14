@@ -109,6 +109,8 @@ def world():
             r = admin.post("/api/teachers", json={"name": name, "email": email,
                                                   "password": "Teach@123", "status": "active"})
             assert r.status_code == 200, r.text
+            # admin-set initial passwords force a change (enforced server-side since Phase 58); tests skip that step
+            MongoClient(server.mongo_url)[TEST_DB].users.update_many({"email": email}, {"$set": {"must_change_password": False}})
             return r.json()
 
         w["tA"] = mk_teacher("ta@test.school", "Teacher A")

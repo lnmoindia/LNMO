@@ -42,6 +42,7 @@ DELETE = {
     "otp_codes": "OTP codes", "password_resets": "Password reset links", "login_attempts": "Login lockouts",
     "audit_logs": "Audit logs", "issues": "Support tickets & crash reports",
     "parent_threads": "Parent chat threads", "parent_messages": "Parent chat messages",
+    "bulk_runs": "Bulk-action results", "quick_replies": "Chat quick replies",
 }
 
 CLASSIFIED = set(KEEP) | set(PARTIAL) | set(DELETE)

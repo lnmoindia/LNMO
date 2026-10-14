@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import api, { errText } from "../../lib/api";
 import { printParentSlip, printParentSlips } from "../../lib/printDoc";
 import { ChannelPicker, ChannelResults } from "../../components/comm/ChannelPicker";
+import { bulkToast, showBulkResult } from "../../components/bulk/BulkResultDialog";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Label } from "../../components/ui/label";
@@ -54,6 +55,7 @@ const Results = ({ result, scope }) => {
   const [tab, setTab] = useState("invited");
   return (
     <div data-testid="invite-results">
+      {result.items && <div className="flex justify-end mb-2"><Button size="sm" variant="outline" onClick={() => showBulkResult({ title: "Parent invites", ...result })} data-testid="invite-view-details">View details</Button></div>}
       {result.skipped_no_phone.length > 0 && (
         <div className="flex justify-end mb-2">
           <Button size="sm" variant="outline" onClick={() => printSlipsFor(scope)} data-testid="print-all-slips-btn">
@@ -93,7 +95,7 @@ export function InviteParentsDialog({ open, onClose, classes, onDone }) {
       const body = all ? { all: true, channels } : { class_names: picked, channels };
       const { data } = await api.post("/students/invite-parents", body);
       setResult(data);
-      toast.success(`${data.invited.length} invited`);
+      bulkToast(toast, { title: "Parent invites", ...data }, null, "Invites: ");
       onDone?.();
     } catch (e) { toast.error(errText(e)); } finally { setBusy(false); }
   };

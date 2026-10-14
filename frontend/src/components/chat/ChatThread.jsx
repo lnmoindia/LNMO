@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Paperclip, Send, Lock, LockOpen, EyeOff, Eye, Flag, CheckCheck, Check, FileText, X, Loader2 } from "lucide-react";
+import { Paperclip, Send, Lock, LockOpen, EyeOff, Eye, Flag, CheckCheck, Check, FileText, X, Loader2, Zap } from "lucide-react";
+import { useChatSocket, sendChat, LiveBadge } from "../../lib/chatSocket";
+import { QuickReplyPicker } from "./QuickReplies";
 import { toast } from "sonner";
 import api, { errText } from "../../lib/api";
 import { Button } from "../ui/button";
@@ -56,10 +58,35 @@ export default function ChatThread({ threadId, onChanged, height = "h-[420px]" }
   const fileRef = useRef(null);
   const count = useRef(0);
 
+  const [typing, setTyping] = useState(null);
+  const [qr, setQr] = useState(null);
+  const lastTyping = useRef(0);
   const load = useCallback(() => {
     api.get(`/chat/threads/${threadId}`).then((r) => setD(r.data)).catch((e) => setD({ error: errText(e) }));
   }, [threadId]);
-  useEffect(() => { setD(null); load(); const iv = setInterval(load, 10000); return () => clearInterval(iv); }, [load]);
+  const onEvent = useCallback((ev) => {
+    if (ev.thread_id !== threadId) return;
+    if (ev.type === "typing") {
+      setTyping(ev.name || "Someone");
+      clearTimeout(window.__chatTypingT);
+      window.__chatTypingT = setTimeout(() => setTyping(null), 4000);
+    } else if (["message", "read", "status"].includes(ev.type)) {
+      if (ev.type === "message") setTyping(null);
+      load(); if (ev.type !== "read") onChanged?.();
+    }
+  }, [threadId, load, onChanged]);
+  const live = useChatSocket(onEvent);
+  useEffect(() => { setD(null); load(); }, [load]);
+  useEffect(() => {
+    if (live === "live") return undefined;
+    const iv = setInterval(load, 10000);
+    return () => clearInterval(iv);
+  }, [live, load]);
+  const onType = (v) => {
+    setText(v);
+    if (d?.can_moderate && v === "/") { setQr(""); return; }
+    if (Date.now() - lastTyping.current > 2500 && v.trim()) { lastTyping.current = Date.now(); sendChat({ type: "typing", thread_id: threadId }); }
+  };
   useEffect(() => {
     const n = d?.messages?.length || 0;
     if (n !== count.current) { count.current = n; end.current?.scrollIntoView({ block: "end" }); }
@@ -106,7 +133,7 @@ export default function ChatThread({ threadId, onChanged, height = "h-[420px]" }
       <div className="flex items-center justify-between gap-2 px-4 py-2.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate" data-testid="chat-thread-title">{t.student_name} · {t.class_name}{t.section ? ` ${t.section}` : ""}</p>
-          <p className="text-[11px] text-slate-500 truncate">{d.can_moderate ? `With ${t.parent_name}` : t.target === "office" ? "School office" : "Class teacher"} · {closed ? "Closed" : "Open"}</p>
+          <p className="text-[11px] text-slate-500 truncate flex items-center gap-2">{d.can_moderate ? `With ${t.parent_name}` : t.target === "office" ? "School office" : "Class teacher"} · {closed ? "Closed" : "Open"} <LiveBadge status={live} /></p>
         </div>
         {d.can_moderate && (
           <Button size="sm" variant="outline" onClick={() => setStatus(closed ? "open" : "closed")} data-testid="chat-toggle-status">
@@ -117,6 +144,7 @@ export default function ChatThread({ threadId, onChanged, height = "h-[420px]" }
       <div className={`${height} overflow-y-auto p-4 space-y-3`} data-testid="chat-messages">
         {d.messages.length === 0 && <p className="text-center text-sm text-slate-400 py-10">No messages yet — say hello.</p>}
         {d.messages.map((m) => <Bubble key={m.id} m={m} tz={d.timezone} canModerate={d.can_moderate} onModerate={moderate} />)}
+        {typing && <p className="text-xs italic text-slate-500" data-testid="chat-typing">{typing} is typing…</p>}
         <div ref={end} />
       </div>
       {closed ? (
@@ -130,11 +158,16 @@ export default function ChatThread({ threadId, onChanged, height = "h-[420px]" }
               <Paperclip size={12} /> {file.name} <button onClick={() => setFile(null)} data-testid="chat-file-remove"><X size={12} /></button>
             </span>
           )}
+          {qr !== null && (
+            <QuickReplyPicker threadId={threadId} initialQuery={qr} draft={text === "/" ? "" : text} onClose={() => { setQr(null); if (text === "/") setText(""); }}
+              onPick={(v) => { setText(v.slice(0, MAX)); setQr(null); }} />
+          )}
           <div className="flex items-end gap-2">
+            {d.can_moderate && <Button size="icon" variant="ghost" onClick={() => setQr(qr === null ? "" : null)} title="Quick replies (or type /)" data-testid="chat-quick-replies-btn"><Zap size={17} /></Button>}
             <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={pick} data-testid="chat-file-input" />
             <Button size="icon" variant="ghost" onClick={() => fileRef.current?.click()} title="Attach image or PDF (max 5 MB)" data-testid="chat-attach-btn"><Paperclip size={17} /></Button>
             <div className="flex-1">
-              <Textarea rows={2} maxLength={MAX} value={text} onChange={(e) => setText(e.target.value)} placeholder="Write a message…" className="resize-none"
+              <Textarea rows={2} maxLength={MAX} value={text} onChange={(e) => onType(e.target.value)} placeholder={d.can_moderate ? "Write a message… (type / for quick replies)" : "Write a message…"} className="resize-none"
                 onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); }} data-testid="chat-input" />
               <p className="text-[10px] text-slate-400 text-right mt-0.5" data-testid="chat-char-count">{text.length}/{MAX}</p>
             </div>

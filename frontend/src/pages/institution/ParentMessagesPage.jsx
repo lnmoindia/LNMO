@@ -4,6 +4,7 @@ import { MessagesSquare, Inbox } from "lucide-react";
 import api, { errText } from "../../lib/api";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import ChatThread from "../../components/chat/ChatThread";
+import { useChatSocket } from "../../lib/chatSocket";
 import { staffBase } from "./ParentsPage";
 
 const when = (iso, tz) => (iso ? new Intl.DateTimeFormat("en-IN", { timeZone: tz, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(iso)) : "");
@@ -21,7 +22,8 @@ export default function ParentMessagesPage() {
     api.get("/chat/threads", { params: { class_name: cls === "all" ? "" : cls, status: status === "all" ? "" : status } })
       .then((r) => setD(r.data)).catch((e) => setErr(errText(e)));
   }, [cls, status]);
-  useEffect(() => { load(); const iv = setInterval(load, 15000); return () => clearInterval(iv); }, [load]);
+  const live = useChatSocket(useCallback((ev) => { if (ev.type === "unread" || ev.type === "message") load(); }, [load]));
+  useEffect(() => { load(); if (live === "live") return undefined; const iv = setInterval(load, 15000); return () => clearInterval(iv); }, [load, live]);
   const [classes, setClasses] = useState([]);
   useEffect(() => { if (d && cls === "all") setClasses([...new Set(d.threads.map((t) => t.class_name).filter(Boolean))].sort()); }, [d, cls]);
 

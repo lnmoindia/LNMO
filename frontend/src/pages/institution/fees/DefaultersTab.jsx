@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { bulkToast } from "../../../components/bulk/BulkResultDialog";
 import { BellRing, Download, Printer, AlertTriangle, Loader2, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import api, { errText } from "../../../lib/api";
@@ -49,7 +50,7 @@ export default function DefaultersTab() {
         const r = data.results[0];
         (r.status === "sent" ? toast.success : toast.message)(`${r.student_name || "Student"}: ${RESULT_LABEL[r.status] || r.status}`);
       } else {
-        toast.success(`Sent ${data.sent} · already reminded today ${data.skipped_throttled} · no contact ${data.no_contact}${data.failed ? ` · failed ${data.failed}` : ""}`);
+        bulkToast(toast, { title: "Defaulter reminders", items: data.items, summary: data.run_summary }, null, "Reminders: ");
       }
       setSel(new Set()); load();
     } catch (e) { toast.error(errText(e)); } finally { setBusy(false); }

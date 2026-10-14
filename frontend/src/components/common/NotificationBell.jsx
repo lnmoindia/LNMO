@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import api from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
+import { useChatSocket } from "../../lib/chatSocket";
 
 const ICONS = {
   absence_request: { icon: UserX, cls: "text-amber-500" },
@@ -39,6 +40,7 @@ export default function NotificationBell() {
     if (t.startsWith("absence") || t.startsWith("sub_"))
       return isTeacher ? "/teacher/substitutions" : "/app/substitutions";
     if (t === "timetable_published") return isTeacher ? "/teacher/timetable" : "/app/timetable";
+    if (t === "bulk_result") return `/app/bulk-runs/${n.related_id}`;
     if (t.startsWith("parent_message")) return `${isTeacher ? "/teacher" : "/app"}/parent-messages?t=${n.related_id}`;
     return isTeacher ? "/teacher/substitutions" : "/app/substitutions";
   }, [isTeacher]);
@@ -47,6 +49,7 @@ export default function NotificationBell() {
     api.get("/notifications", { params: { limit: 12 } }).then((r) => setData(r.data)).catch(() => {});
   }, []);
 
+  useChatSocket(useCallback((ev) => { if (ev.type === "unread") load(); }, [load]));
   useEffect(() => {
     load();
     const iv = setInterval(load, 45000);

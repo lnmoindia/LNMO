@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { bulkToast } from "../../../components/bulk/BulkResultDialog";
 import { Search, Wallet, Printer, Undo2, BookOpenCheck, BellRing, FileDown, FileText } from "lucide-react";
 import { toast } from "sonner";
 import api, { errText } from "../../../lib/api";
@@ -168,7 +170,8 @@ export default function AccountsTab({ readOnly, canCollect }) {
   const [cls, setCls] = useState("");
   const [q, setQ] = useState("");
   const [rows, setRows] = useState(null);
-  const [open, setOpen] = useState(null);
+  const [params] = useSearchParams();
+  const [open, setOpen] = useState(params.get("account"));
   const load = useCallback(() => api.get("/fees/accounts", { params: { structure_id: sid, class_name: cls, q } }).then((r) => setRows(r.data.accounts)).catch(() => setRows([])), [sid, cls, q]);
   const [classes, setClasses] = useState([]);
   useEffect(() => { api.get("/res/classes", { params: { limit: 500 } }).then((r) => setClasses(r.data.items || [])).catch(() => {}); }, []);
@@ -176,7 +179,7 @@ export default function AccountsTab({ readOnly, canCollect }) {
     if (!window.confirm(`Send a fee reminder to every parent in ${cls} with an unpaid balance? Each student gets at most one reminder per day.`)) return;
     try {
       const { data } = await api.post("/fees/reminders/class", { class_name: cls });
-      toast.success(`${cls}: ${data.sent} sent · ${data.deduped} already reminded today · ${data.bell_only_no_phone} bell-only (no phone)`);
+      bulkToast(toast, { title: `Fee reminders · ${cls}`, items: data.items, summary: data.run_summary }, null, `${cls}: `);
     } catch (e) { toast.error(errText(e)); }
   };
   useEffect(() => { api.get("/fees/structures").then((r) => setStructures(r.data.structures)).catch(() => {}); }, []);

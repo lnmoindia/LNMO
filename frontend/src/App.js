@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import "./App.css";
 import { Toaster } from "./components/ui/sonner";
+import { BulkResultHost } from "./components/bulk/BulkResultDialog";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import { ReportIssueProvider } from "./context/ReportIssue";
@@ -39,6 +40,7 @@ import UsersPage from "./pages/institution/UsersPage";
 import ParentsPage from "./pages/institution/ParentsPage";
 import ParentDetailPage from "./pages/institution/ParentDetailPage";
 import ParentMessagesPage from "./pages/institution/ParentMessagesPage";
+import BulkRunPage from "./pages/institution/BulkRunPage";
 import ChangePasswordPage from "./pages/institution/ChangePasswordPage";
 import ParentSetupPage from "./pages/ParentSetupPage";
 import FeeLinkPage from "./pages/FeeLinkPage";
@@ -112,6 +114,7 @@ function App() {
       <AuthProvider>
         <ReportIssueProvider>
         <BrowserRouter>
+          <BulkResultHost />
           <Routes>
             <Route path="/" element={<RootRedirect />} />
             <Route path="/login" element={<LoginPage />} />
@@ -174,6 +177,7 @@ function App() {
               <Route path="parents" element={<ParentsPage />} />
               <Route path="parents/:id" element={<ParentDetailPage />} />
               <Route path="parent-messages" element={<ParentMessagesPage />} />
+              <Route path="bulk-runs/:id" element={<BulkRunPage />} />
               <Route path="classes" element={<Navigate to="/app/class-hub" replace />} />
               <Route path="sections" element={<Navigate to="/app/class-hub" replace />} />
               <Route path="subjects" element={<ResourcePage {...subjectsConfig} headerExtra={({ reload }) => <SubjectImportButton onDone={reload} />} />} />

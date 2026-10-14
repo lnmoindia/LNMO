@@ -7,6 +7,7 @@ import {
 } from "../../components/ui/dialog";
 import { Button } from "../../components/ui/button";
 import EnrollmentPicker from "./EnrollmentPicker";
+import { showBulkResult } from "../../components/bulk/BulkResultDialog";
 
 const TEMPLATE_COLS = [
   "first_name", "last_name", "admission_no", "email", "date_of_birth",
@@ -96,7 +97,7 @@ export default function BulkImportDialog({ open, onClose, onDone }) {
       const backendSkips = (data.skipped || []).map((s) => ({ row: validRows[s.row - 1]?._row ?? s.row, reason: s.reason }));
       const clientSkips = validated.filter((r) => r._error).map((r) => ({ row: r._row, reason: r._error }));
       const skipped = [...clientSkips, ...backendSkips].sort((a, b) => a.row - b.row);
-      setResult({ created: data.created, skipped });
+      setResult({ created: data.created, skipped, run: data.items ? { title: `Student import · ${placement.class_name}`, items: [...data.items, ...clientSkips.map((c) => ({ id: `client-${c.row}`, label: `Row ${c.row}`, status: "skipped", reason: c.reason }))], summary: { ...data.summary, skipped: (data.summary?.skipped || 0) + clientSkips.length } } : null });
       if (data.warning) toast.warning(data.warning);
       setPhase("result");
       onDone && onDone();
@@ -204,7 +205,10 @@ export default function BulkImportDialog({ open, onClose, onDone }) {
                 {result.skipped.map((s, i) => <div key={i}>Row {s.row}: {s.reason}</div>)}
               </div>
             )}
-            <Button onClick={close} className="mt-6 bg-indigo-700 hover:bg-indigo-800 text-white" data-testid="import-done-btn">Done</Button>
+            <div className="mt-6 flex gap-2">
+              {result.run && <Button variant="outline" onClick={() => showBulkResult(result.run)} data-testid="import-view-details">View details</Button>}
+              <Button onClick={close} className="bg-indigo-700 hover:bg-indigo-800 text-white" data-testid="import-done-btn">Done</Button>
+            </div>
           </div>
         )}
       </DialogContent>

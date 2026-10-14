@@ -68,7 +68,7 @@ def ctx():
         t = {n: admin.post("/api/teachers", json={"name": n, "email": f"{n.lower()}@s52.test", "password": "Teach@123", "status": "active"}).json()
              for n in ("Tabs", "Mina", "Max", "Free", "Busy", "Deepa")}
         for i, n in enumerate(t):
-            mon.users.update_one({"id": t[n]["id"]}, {"$set": {"phone": f"+91 90000 0000{i}"}})
+            mon.users.update_one({"id": t[n]["id"]}, {"$set": {"phone": f"+91 90000 0000{i}", "must_change_password": False}})
         admin.post("/api/res/classes", json={"name": "Grade 8", "academic_unit_id": hs["id"], "status": "active"})
         admin.post("/api/res/classes", json={"name": "Grade 1", "academic_unit_id": lp["id"], "status": "active"})
         for cls, sec in (("Grade 8", "A"), ("Grade 8", "B"), ("Grade 1", "A")):

@@ -5,6 +5,7 @@ import api, { errText } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { printSlipsFor } from "./ParentInvites";
 import { ChannelPicker } from "../../components/comm/ChannelPicker";
+import { bulkToast } from "../../components/bulk/BulkResultDialog";
 
 const Seg = ({ value, total, className }) => (
   <div className={`h-full ${className}`} style={{ width: `${total ? (value / total) * 100 : 0}%` }} />
@@ -64,7 +65,7 @@ export function OnboardingProgress({ refreshKey }) {
       if (!channels.length) { toast.error("Pick at least one channel"); return; }
       const { data } = await api.post("/students/invite-reminder", { class_id: row.class_id, channels });
       const skipped = (data.results || []).filter((r) => Object.values(r.channels).some((v) => String(v).startsWith("skipped"))).length;
-      if (data.ok) toast.success(`Reminder sent to ${data.sent} parent${data.sent === 1 ? "" : "s"} in ${row.class_name}${skipped ? ` · ${skipped} skipped on some channels (no email/phone)` : ""}`);
+      if (data.ok) bulkToast(toast, { title: `Invite reminders · ${row.class_name}`, ...data }, null, `Reminder sent to ${data.sent} parent${data.sent === 1 ? "" : "s"}${skipped ? ` (${skipped} skipped on some channels)` : ""} — `);
       else toast.info(data.message);
       load();
     } catch (e) { toast.error(errText(e)); } finally { setBusy(""); }

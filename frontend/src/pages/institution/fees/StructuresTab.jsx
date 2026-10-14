@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Plus, Copy, Pencil, Users, FileStack, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { bulkToast, showBulkResult, summaryText } from "../../../components/bulk/BulkResultDialog";
 import api, { errText } from "../../../lib/api";
 import { inr, FREQ_LABEL } from "../../../lib/fees";
 import { Button } from "../../../components/ui/button";
@@ -107,7 +108,7 @@ function GenerateDialog({ st, onClose, onDone }) {
     setBusy(true);
     try {
       const { data } = await api.post(`/fees/structures/${st.id}/generate`, { frequency: freq, periods: rows });
-      toast.success(`${data.created} invoices generated${data.skipped_existing ? ` · ${data.skipped_existing} already existed` : ""}`); onDone();
+      bulkToast(toast, { title: `Generate invoices · ${st.name}`, ...data }, null, `${data.created} invoices generated${data.skipped_existing ? ` · ${data.skipped_existing} already existed` : ""} — `); onDone();
     } catch (e) { toast.error(errText(e)); } finally { setBusy(false); }
   };
   return (
@@ -136,7 +137,7 @@ function GenerateDialog({ st, onClose, onDone }) {
   );
 }
 
-function StructureCard({ st, readOnly, onEdit, onClone, onApply, onGenerate, onChanged }) {
+function StructureCard({ st, readOnly, onEdit, onClone, onApply, onGenerate, onChanged, onRetryApply }) {
   return (
     <div className={`rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-3 ${st.archived ? "opacity-75" : ""}`} data-testid={`fee-structure-${st.id}`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -156,6 +157,12 @@ function StructureCard({ st, readOnly, onEdit, onClone, onApply, onGenerate, onC
         )}
       </div>
       <div className="flex flex-wrap gap-2">
+        {st.last_apply && (
+          <button onClick={async () => { const { data } = await api.get(`/bulk-runs/${st.last_apply.id}`); showBulkResult(data, onRetryApply); }}
+            className="text-xs rounded-full bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-slate-600 dark:text-slate-300 hover:bg-indigo-50 hover:text-indigo-700" data-testid={`fee-structure-last-apply-${st.id}`}>
+            Last apply: {summaryText(st.last_apply.summary)} · <span className="underline">Details</span>
+          </button>
+        )}
         {st.heads.map((h) => (
           <span key={h.id} className="text-xs rounded-full border border-slate-200 dark:border-slate-700 px-2.5 py-1 text-slate-600 dark:text-slate-300">
             {h.title} · <b>{inr(h.amount)}</b> · {FREQ_LABEL[h.frequency]}{h.optional ? " · optional" : ""}</span>
@@ -178,6 +185,15 @@ export default function StructuresTab({ readOnly }) {
     api.get("/res/academic_units", { params: { limit: 200 } }).then((r) => setUnits(r.data.items || [])).catch(() => {});
     api.get("/res/classes", { params: { limit: 500 } }).then((r) => setClasses(r.data.items || [])).catch(() => {});
   }, [load]);
+  const applyTo = async (st, quiet) => {
+    try {
+      const { data } = await api.post(`/fees/structures/${st.id}/apply`);
+      const run = { title: `Apply '${st.name}' to students`, ...data };
+      if (!quiet) bulkToast(toast, run, () => applyTo(st, true), "Apply to students: ");
+      load();
+      return run;
+    } catch (e) { toast.error(errText(e)); return null; }
+  };
   const act = async (fn, msg) => { try { const r = await fn(); toast.success(msg(r.data)); load(); } catch (e) { toast.error(errText(e)); } };
   return (
     <div className="space-y-4 pt-2" data-testid="fees-structures-tab">
@@ -191,7 +207,7 @@ export default function StructuresTab({ readOnly }) {
       {rows?.filter((st) => showArchived || !st.archived).map((st) => (
         <StructureCard key={st.id} st={st} readOnly={readOnly} onEdit={() => setEditing(st)} onGenerate={() => setGen(st)} onChanged={load}
           onClone={() => act(() => api.post(`/fees/structures/${st.id}/clone`), () => "Cloned — edit the copy")}
-          onApply={() => act(() => api.post(`/fees/structures/${st.id}/apply`), (d) => `${d.created} accounts created${d.skipped.length ? ` · ${d.skipped.length} skipped` : ""}`)} />
+          onApply={() => applyTo(st)} onRetryApply={() => applyTo(st, true)} />
       ))}
       <StructureDialog open={editing !== undefined} initial={editing} units={units} classes={classes} onClose={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); load(); }} />
       <GenerateDialog st={gen} onClose={() => setGen(null)} onDone={() => { setGen(null); load(); }} />

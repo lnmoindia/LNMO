@@ -110,13 +110,14 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="User not found")
     if payload.get("tv", 0) != user.get("tv", 0):
         raise HTTPException(status_code=401, detail="Session expired — please sign in again")
-    if user.get("must_change_password") and request.url.path not in PW_CHANGE_ALLOWED:
+    if ENFORCE_PW_CHANGE and user.get("must_change_password") and request.url.path not in PW_CHANGE_ALLOWED:
         raise HTTPException(status_code=403, detail={"code": "PASSWORD_CHANGE_REQUIRED",
                                                      "msg": "Choose a new password before continuing."})
     return user
 
 
 # While must_change_password is set, only these authenticated routes work (public routes don't use auth).
+ENFORCE_PW_CHANGE = True  # only in-process legacy test harnesses flip this (tests/conftest.py); never env-driven
 PW_CHANGE_ALLOWED = {"/api/auth/change-password", "/api/auth/me", "/api/auth/logout", "/api/platform/branding"}
 
 
@@ -1373,7 +1374,13 @@ async def bulk_enroll_students(payload: dict = Body(...),
         await db.enrollments.insert_many(enroll_docs)
     await audit(user, "import", "students", class_name, f"{created} students into {class_name}")
     warning = await _capacity_warning(iid, class_name, section)
-    return {"created": created, "skipped": skipped, "total": len(rows), **({"warning": warning} if warning else {})}
+    bitems = [phase59.item(d["id"], f"{d.get('first_name', '')} {d.get('last_name', '')}".strip(), "created", "Student created and enrolled", "created",
+                           f"{d.get('admission_no') or '—'} · {d.get('class_name') or ''} {d.get('section') or ''}".strip(), phase59.fix("open_student", d["id"]))
+              for d in students_docs]
+    bitems += [phase59.item(f"row-{k['row']}", f"Row {k['row']}", "skipped", k["reason"], "row_error", None, None) for k in skipped]
+    run = await phase59.save_run(user, "student_import", f"Student import · {class_name}", bitems)
+    return {"created": created, "skipped": skipped, "total": len(rows), **({"warning": warning} if warning else {}), "run_id": run["run_id"],
+            "items": run["items"], "summary": run["summary"]}
 
 
 @api.post("/subject-offerings/bulk")
@@ -6007,7 +6014,9 @@ async def invite_parents(payload: dict = Body(...), user: dict = Depends(require
     iid = user["institution_id"]
     channel = phase58.parse_channels(payload)
     students = await _invite_scope_students(iid, user, payload)
-    return await _run_parent_invites(iid, students, channel, user)
+    res = await _run_parent_invites(iid, students, channel, user)
+    run = await phase59.save_run(user, "parent_invite", "Parent invites", phase59.invite_items(res))
+    return {**res, **run}
 
 
 @api.post("/students/{student_id}/invite-parent")
@@ -6219,7 +6228,15 @@ async def invite_reminder(payload: dict = Body(...), user: dict = Depends(requir
                                                  "class_name": cls["name"], "date": today, "sent": sent,
                                                  "pending_parents": len(pending), "by": user.get("email"), "at": now_iso()})
     await audit(user, "invite_reminder", "parent_invites", cls["id"], f"{sent} reminders · {cls['name']}", iid)
-    return {"ok": True, "sent": sent, "pending_parents": len(pending), "class_name": cls["name"], "results": results}
+    ritems = []
+    for r in results:
+        per = r["channels"]
+        st_ = phase58.overall(per)
+        chan = ", ".join(f"{k}: {v.replace('skipped_', 'no ').replace('_', ' ')}" for k, v in per.items() if k in phase58.INVITE_CHANNELS)
+        ritems.append(phase59.item(r["parent_id"], r["name"], {"sent": "sent", "failed": "failed"}.get(st_, "skipped"),
+                                   f"Reminder {st_} ({chan})", st_, cls["name"], phase59.fix("open_parent", r["parent_id"])))
+    run = await phase59.save_run(user, "invite_reminder", f"Invite reminders · {cls['name']}", ritems, ref_id=cls["id"])
+    return {"ok": True, "sent": sent, "pending_parents": len(pending), "class_name": cls["name"], "results": results, **run}
 
 
 # ---- Public (unauthenticated) parent onboarding ----
@@ -11483,44 +11500,71 @@ async def promotion_execute(run_id: str, user: dict = Depends(require_roles("ins
         raise HTTPException(status_code=400, detail="No active enrollments remain in the from-year")
     decs = await db.promotion_decisions.find({"run_id": run_id}, {"_id": 0}).to_list(50000)
     counts = {"promote": 0, "detain": 0, "transfer_out": 0, "graduate": 0}
+    run_items = []
     for d in decs:
         sid = d["student_id"]
         dec = d.get("decision", "promote")
-        if dec in ("promote", "detain"):
-            to_class = d.get("to_class") or d.get("from_class")
-            to_section = d.get("to_section") or d.get("from_section")
-            if to_section and not await db.sections.find_one({"institution_id": iid, "class_name": to_class, "name": to_section}):
-                await db.sections.insert_one({"id": str(uuid.uuid4()), "institution_id": iid, "name": to_section,
-                                              "class_name": to_class, "status": "active", "created_at": now_iso()})
-            await db.enrollments.update_many({"institution_id": iid, "student_id": sid, "academic_year": from_year},
-                                             {"$set": {"status": "completed", "completed_by_run": run_id}})
-            await db.enrollments.insert_one({"id": str(uuid.uuid4()), "institution_id": iid, "student_id": sid,
-                                             "student_name": d.get("student_name"), "admission_no": d.get("admission_no"),
-                                             "academic_year": to_year, "class_name": to_class, "section": to_section,
-                                             "status": "active", "promotion_run_id": run_id, "created_at": now_iso()})
-            await db.students.update_one({"id": sid, "institution_id": iid}, {"$set": {
-                "class_name": to_class, "section": to_section, "academic_year": to_year,
-                "enrollment_status": "enrolled"}})
-        elif dec == "graduate":
-            await db.enrollments.update_many({"institution_id": iid, "student_id": sid, "academic_year": from_year},
-                                             {"$set": {"status": "completed", "completed_by_run": run_id}})
-            await db.students.update_one({"id": sid, "institution_id": iid}, {"$set": {
-                "enrollment_status": "alumni", "graduated_year": from_year, "promotion_run_id": run_id}})
-        elif dec == "transfer_out":
-            await db.enrollments.update_many({"institution_id": iid, "student_id": sid, "academic_year": from_year},
-                                             {"$set": {"status": "completed", "completed_by_run": run_id}})
-            await db.students.update_one({"id": sid, "institution_id": iid}, {"$set": {
-                "enrollment_status": "transferred", "promotion_run_id": run_id}})
-            st = await db.students.find_one({"id": sid, "institution_id": iid}, {"_id": 0, "user_id": 1})
-            if st and st.get("user_id"):
-                await db.users.update_one({"id": st["user_id"]}, {"$set": {"status": "inactive", "disabled_by_run": run_id}})
+        sub = f"{d.get('admission_no') or '—'} · {d.get('from_class') or ''} {d.get('from_section') or ''}".strip()
+        try:
+            reason = await _promo_apply_one(iid, run_id, d, sid, dec, from_year, to_year)
+        except Exception as e:  # noqa: BLE001
+            run_items.append(phase59.item(sid, d.get("student_name"), "failed", f"Could not apply '{dec}': {e}", "error", sub,
+                                          phase59.fix("open_student", sid)))
+            continue
+        run_items.append(phase59.item(sid, d.get("student_name"), "created", reason, dec, sub, phase59.fix("open_student", sid)))
         counts[dec] = counts.get(dec, 0) + 1
     await db.promotion_runs.update_one({"id": run_id}, {"$set": {
         "status": "executed", "executed_by": user.get("name") or user.get("email"), "executed_at": now_iso()}})
     await audit(user, "promotion_execute", "promotion_runs", run_id, f"{from_year} → {to_year}", iid)
+    prun = await phase59.save_run(user, "promotion_execute", f"Promotion {from_year} → {to_year}", run_items, ref_id=run_id, extra=dict(counts))
     carry = await _carry_forward_dues(iid, from_year, to_year, [d["student_id"] for d in decs
                                       if d.get("decision", "promote") in ("promote", "detain")], user, run_id)
-    return {"ok": True, "status": "executed", "summary": counts, "dues_carry_forward": carry}
+    crun = await phase59.save_run(user, "dues_carry_forward", f"Dues carry-forward {from_year} → {to_year}", carry["items"], ref_id=run_id,
+                                  extra={"amount": carry["amount"]})
+    carry.update(run_id=crun["run_id"], summary=crun["summary"])
+    return {"ok": True, "status": "executed", "summary": counts, "dues_carry_forward": carry,
+            "run_id": prun["run_id"], "items": prun["items"], "run_summary": prun["summary"]}
+
+
+async def _promo_apply_one(iid, run_id, d, sid, dec, from_year, to_year):
+    """Apply one promotion decision; returns the human-readable outcome."""
+    if dec in ("promote", "detain"):
+        to_class = d.get("to_class") or d.get("from_class")
+        to_section = d.get("to_section") or d.get("from_section")
+        if to_section and not await db.sections.find_one({"institution_id": iid, "class_name": to_class, "name": to_section}):
+            await db.sections.insert_one({"id": str(uuid.uuid4()), "institution_id": iid, "name": to_section,
+                                          "class_name": to_class, "status": "active", "created_at": now_iso()})
+        await db.enrollments.update_many({"institution_id": iid, "student_id": sid, "academic_year": from_year},
+                                         {"$set": {"status": "completed", "completed_by_run": run_id}})
+        await db.enrollments.insert_one({"id": str(uuid.uuid4()), "institution_id": iid, "student_id": sid,
+                                         "student_name": d.get("student_name"), "admission_no": d.get("admission_no"),
+                                         "academic_year": to_year, "class_name": to_class, "section": to_section,
+                                         "status": "active", "promotion_run_id": run_id, "created_at": now_iso()})
+        await db.students.update_one({"id": sid, "institution_id": iid}, {"$set": {
+            "class_name": to_class, "section": to_section, "academic_year": to_year,
+            "enrollment_status": "enrolled"}})
+    elif dec == "graduate":
+        await db.enrollments.update_many({"institution_id": iid, "student_id": sid, "academic_year": from_year},
+                                         {"$set": {"status": "completed", "completed_by_run": run_id}})
+        await db.students.update_one({"id": sid, "institution_id": iid}, {"$set": {
+            "enrollment_status": "alumni", "graduated_year": from_year, "promotion_run_id": run_id}})
+    elif dec == "transfer_out":
+        await db.enrollments.update_many({"institution_id": iid, "student_id": sid, "academic_year": from_year},
+                                         {"$set": {"status": "completed", "completed_by_run": run_id}})
+        await db.students.update_one({"id": sid, "institution_id": iid}, {"$set": {
+            "enrollment_status": "transferred", "promotion_run_id": run_id}})
+        st = await db.students.find_one({"id": sid, "institution_id": iid}, {"_id": 0, "user_id": 1})
+        if st and st.get("user_id"):
+            await db.users.update_one({"id": st["user_id"]}, {"$set": {"status": "inactive", "disabled_by_run": run_id}})
+    else:
+        raise ValueError(f"unknown decision {dec}")
+    if dec == "promote":
+        return f"Promoted to {to_class}{' ' + to_section if to_section else ''} ({to_year})"
+    if dec == "detain":
+        return f"Detained in {to_class}{' ' + to_section if to_section else ''} ({to_year})"
+    if dec == "graduate":
+        return "Graduated — marked alumni"
+    return "Transferred out — portal login disabled" if st and st.get("user_id") else "Transferred out"
 
 
 @api.post("/promotion/{run_id}/rollback")
@@ -11958,6 +12002,7 @@ async def list_fee_structures(user: dict = Depends(require_admin_or_principal)):
         if not st.get("academic_year_id"):
             st["academic_year_id"] = legacy.get(st.get("academic_year"))
         st["usage"] = await _structure_usage(st["id"])
+        st["last_apply"] = await phase59.last_run(iid, "fee_apply", st["id"])
         st["account_count"] = await db.fee_accounts.count_documents({"structure_id": st["id"], "status": "active"})
         st["invoice_count"] = await db.fee_invoices.count_documents({"structure_id": st["id"]})
         rows.append(st)
@@ -12108,28 +12153,49 @@ async def apply_fee_structure(sid: str, user: dict = Depends(require_fee_admin))
         raise HTTPException(status_code=400, detail="Activate the structure before applying it")
     names = await _struct_class_names(iid, st)
     optional_ids = [h["id"] for h in st["heads"] if h.get("optional")]
-    created, skipped = 0, []
-    async for s in db.students.find({"institution_id": iid, "enrollment_status": "enrolled", "class_name": {"$in": names}}, {"_id": 0}):
+    created, skipped, items = 0, [], []
+    B, yr = phase59, st["academic_year"]
+    snames = {x["id"]: x["name"] async for x in db.fee_structures.find({"institution_id": iid}, {"_id": 0, "id": 1, "name": 1})}
+    async for s in db.students.find({"institution_id": iid, "class_name": {"$in": names}}, {"_id": 0}).sort([("class_name", 1), ("first_name", 1)]):
         sname = f"{s.get('first_name', '')} {s.get('last_name', '')}".strip()
-        if await db.fee_accounts.find_one({"structure_id": sid, "student_id": s["id"]}):
-            skipped.append({"student_name": sname, "reason": "already applied"})
+        sub = f"{s.get('admission_no') or '—'} · {s.get('class_name') or ''} {s.get('section') or ''}".strip()
+
+        def skip(code, reason, fx):
+            skipped.append({"student_name": sname, "reason": reason, "reason_code": code})
+            items.append(B.item(s["id"], sname, "skipped", reason, code, sub, fx))
+        if s.get("status") == "inactive":
+            skip("inactive", "Student inactive", B.fix("open_student", s["id"]))
             continue
-        other = await db.fee_accounts.find_one({"institution_id": iid, "student_id": s["id"], "academic_year": st["academic_year"],
-                                                "status": "active"}, {"_id": 0, "structure_id": 1})
+        if s.get("enrollment_status") != "enrolled":
+            skip("not_enrolled", f"Not enrolled in a class covered by this structure (status: {(s.get('enrollment_status') or 'not enrolled').replace('_', ' ')})",
+                 B.fix("enrol_student", s["id"]))
+            continue
+        mine = await db.fee_accounts.find_one({"structure_id": sid, "student_id": s["id"]}, {"_id": 0, "id": 1})
+        if mine:
+            skip("already_applied", f"Already has an account for {yr} under '{st['name']}'", B.fix("open_ledger", mine["id"]))
+            continue
+        other = await db.fee_accounts.find_one({"institution_id": iid, "student_id": s["id"], "academic_year": yr,
+                                                "status": "active"}, {"_id": 0, "id": 1, "structure_id": 1})
         if other:
-            skipped.append({"student_name": sname, "reason": "already on another fee structure this year"})
+            skip("other_structure", f"Already has an account for {yr} under '{snames.get(other['structure_id'], 'another structure')}'",
+                 B.fix("open_ledger", other["id"]))
             continue
+        aid = str(uuid.uuid4())
         try:
             await db.fee_accounts.insert_one({
-                "id": str(uuid.uuid4()), "institution_id": iid, "student_id": s["id"], "student_name": sname,
+                "id": aid, "institution_id": iid, "student_id": s["id"], "student_name": sname,
                 "admission_no": s.get("admission_no"), "class_name": s.get("class_name"), "section": s.get("section"),
-                "academic_year": st["academic_year"], "structure_id": sid, "included_head_ids": list(optional_ids),
+                "academic_year": yr, "structure_id": sid, "included_head_ids": list(optional_ids),
                 "discount": None, "discount_used": 0.0, "status": "active", "created_at": now_iso()})
             created += 1
+            items.append(B.item(s["id"], sname, "created", "Fee account created", "created", sub, B.fix("open_ledger", aid)))
         except DuplicateKeyError:
-            skipped.append({"student_name": sname, "reason": "already applied"})
-    await audit(user, "fee_structure_apply", "fee_accounts", sid, f"{created} accounts · {st['name']}", iid)
-    return {"created": created, "skipped": skipped}
+            skip("already_applied", f"Already has an account for {yr} under '{st['name']}'", B.fix("open_student", s["id"]))
+        except Exception as e:  # noqa: BLE001
+            items.append(B.item(s["id"], sname, "failed", f"Could not create the account: {e}", "error", sub, B.fix("open_student", s["id"])))
+    await audit(user, "fee_structure_apply", "fee_accounts", sid, f"{created} accounts · {len(skipped)} skipped · {st['name']}", iid)
+    run = await B.save_run(user, "fee_apply", f"Apply '{st['name']}' to students", items, ref_id=sid)
+    return {"created": created, "skipped": skipped, **run}
 
 
 @api.post("/fees/structures/{sid}/generate")
@@ -12154,13 +12220,17 @@ async def generate_fee_invoices(sid: str, body: FeeGenerateIn, user: dict = Depe
     q = {"structure_id": sid, "status": "active"}
     if body.class_name:
         q["class_name"] = body.class_name
-    created, skipped = 0, 0
+    created, skipped, run_items = 0, 0, []
     async for acc in db.fee_accounts.find(q, {"_id": 0}):
         inc = set(acc.get("included_head_ids") or [])
         items = [{"head_id": h["id"], "title": h["title"], "amount": _r2(h["amount"])}
                  for h in heads if not h.get("optional") or h["id"] in inc]
+        sub = f"{acc.get('admission_no') or '—'} · {acc.get('class_name') or ''} {acc.get('section') or ''}".strip()
         if not items:
+            run_items.append(phase59.item(acc["id"], acc.get("student_name"), "skipped", f"No {body.frequency.replace('_', '-')} heads apply (optional heads not included)",
+                                          "no_heads", sub, phase59.fix("open_ledger", acc["id"])))
             continue
+        c0, s0 = created, skipped
         subtotal = _r2(sum(i["amount"] for i in items))
         for p in body.periods:
             key = {"account_id": acc["id"], "frequency": body.frequency, "period_label": p.label.strip()}
@@ -12189,8 +12259,14 @@ async def generate_fee_invoices(sid: str, body: FeeGenerateIn, user: dict = Depe
                 acc["discount_used"] = _r2(acc.get("discount_used", 0) + disc)
                 await db.fee_accounts.update_one({"id": acc["id"]}, {"$set": {"discount_used": acc["discount_used"]}})
             created += 1
+        nc, ns = created - c0, skipped - s0
+        run_items.append(phase59.item(acc["id"], acc.get("student_name"), "created" if nc else "skipped",
+                                      f"{nc} invoice(s) created" + (f", {ns} period(s) already invoiced" if ns else "") if nc else "All selected periods already invoiced",
+                                      "created" if nc else "already_invoiced", sub, phase59.fix("open_ledger", acc["id"])))
     await audit(user, "fee_invoices_generate", "fee_invoices", sid, f"{created} {body.frequency} invoices · {st['name']}", iid)
-    return {"created": created, "skipped_existing": skipped}
+    run = await phase59.save_run(user, "fee_generate", f"Generate {body.frequency.replace('_', '-')} invoices · {st['name']}", run_items, ref_id=sid,
+                                 extra={"invoices_created": created, "invoices_skipped": skipped})
+    return {"created": created, "skipped_existing": skipped, **run}
 
 
 async def _account_rows(iid, accounts):
@@ -12724,7 +12800,8 @@ async def run_fee_reminders(payload: dict = Body(default={}), user: dict = Depen
         raise HTTPException(status_code=400, detail="as_of must be YYYY-MM-DD")
     res = await _fee_reminder_sweep(as_of, user["institution_id"])
     await audit(user, "fee_reminders_run", "fee_reminders", None, f"{as_of}: {len(res)} due", user["institution_id"])
-    return {"as_of": as_of, "results": res, "sent": sum(1 for r in res if r["status"] == "sent")}
+    run = await phase59.save_run(user, "fee_reminders_run", f"Fee reminders run · {as_of}", await phase59.reminder_items(res))
+    return {"as_of": as_of, "results": res, "sent": sum(1 for r in res if r["status"] == "sent"), **run}
 
 
 @api.post("/fees/invoices/{inv_id}/remind")
@@ -12760,7 +12837,8 @@ async def remind_fee_class(payload: dict = Body(...), user: dict = Depends(requi
             results.append(r)
     summary = {k: sum(1 for r in results if r["status"] == k) for k in ("sent", "deduped", "bell_only_no_phone", "bell_only_failed")}
     await audit(user, "fee_remind_class", "fee_invoices", None, f"{cn}: {summary}", iid)
-    return {"class_name": cn, "results": results, **summary}
+    run = await phase59.save_run(user, "fee_remind_class", f"Fee reminders · {cn}", await phase59.reminder_items(results), ref_id=cn)
+    return {"class_name": cn, "results": results, **summary, "run_id": run["run_id"], "items": run["items"], "run_summary": run["summary"]}
 
 
 @api.get("/public/fee-link/{token}")
@@ -13043,18 +13121,29 @@ async def fee_defaulters_remind(body: DefaulterRemindIn, user: dict = Depends(re
                         "status": _REMIND_STATUS.get(r["status"], r["status"]), "detail": r["status"]})
     summary = {k: sum(1 for r in results if r["status"] == k) for k in ("sent", "skipped_throttled", "no_contact", "failed")}
     await audit(user, "fee_defaulters_remind", "fee_reminders", None, f"{len(results)} students: {summary}", iid)
-    return {"results": results, **summary}
+    run = await phase59.save_run(user, "fee_defaulters_remind", "Defaulter reminders", await phase59.reminder_items(results))
+    return {"results": results, **summary, "run_id": run["run_id"], "items": run["items"], "run_summary": run["summary"]}
 
 
 async def _carry_forward_dues(iid, from_year, to_year, student_ids, actor, run_id=None):
     """Additive + idempotent: one 'Previous dues' arrears invoice per student per from→to year, linked to the source
     invoices (which are only FLAGGED carried_forward_to — amounts/payments are never touched)."""
     today = _today()
-    out = {"created": 0, "already_carried": 0, "amount": 0.0, "arrears_invoice_ids": []}
+    out = {"created": 0, "already_carried": 0, "amount": 0.0, "arrears_invoice_ids": [], "items": []}
+    names = {x["id"]: x async for x in db.students.find({"institution_id": iid, "id": {"$in": list(student_ids)}},
+                                                        {"_id": 0, "id": 1, "first_name": 1, "last_name": 1, "admission_no": 1,
+                                                         "class_name": 1, "section": 1})}
+
+    def add(sid, status, reason, code):
+        x = names.get(sid, {})
+        out["items"].append(phase59.item(sid, f"{x.get('first_name', '')} {x.get('last_name', '')}".strip() or sid, status, reason, code,
+                                         f"{x.get('admission_no') or '—'} · {x.get('class_name') or ''} {x.get('section') or ''}".strip(),
+                                         phase59.fix("open_student", sid)))
     for sid in dict.fromkeys(student_ids):
         key = f"{sid}:{from_year}>{to_year}"
         if await db.fee_invoices.find_one({"institution_id": iid, "arrears_key": key}, {"_id": 1}):
             out["already_carried"] += 1
+            add(sid, "skipped", f"Dues already carried forward to {to_year}", "already_carried")
             continue
         src = await db.fee_invoices.find({"institution_id": iid, "student_id": sid, "academic_year": from_year,
                                           "carried_forward_to": {"$exists": False}, "status": {"$ne": "paid"}},
@@ -13062,6 +13151,7 @@ async def _carry_forward_dues(iid, from_year, to_year, student_ids, actor, run_i
         late = await _late_map({i["structure_id"] for i in src if i.get("structure_id")})
         open_ = [(i, v) for i in src for v in [_invoice_view(i, late.get(i.get("structure_id")), today)] if v["balance"] > 0]
         if not open_:
+            add(sid, "skipped", f"No unpaid dues in {from_year}", "no_dues")
             continue
         stu = await db.students.find_one({"id": sid, "institution_id": iid}, {"_id": 0}) or {}
         items = [{"head_id": None, "title": f"Previous dues {from_year} · {i.get('period_label')}", "amount": v["balance"],
@@ -13080,6 +13170,7 @@ async def _carry_forward_dues(iid, from_year, to_year, student_ids, actor, run_i
             await db.fee_invoices.insert_one(dict(doc))
         except DuplicateKeyError:
             out["already_carried"] += 1
+            add(sid, "skipped", f"Dues already carried forward to {to_year}", "already_carried")
             continue
         for i, v in open_:
             await db.fee_invoices.update_one({"id": i["id"], "carried_forward_to": {"$exists": False}}, {"$set": {
@@ -13090,6 +13181,7 @@ async def _carry_forward_dues(iid, from_year, to_year, student_ids, actor, run_i
         out["created"] += 1
         out["amount"] = _r2(out["amount"] + total)
         out["arrears_invoice_ids"].append(doc["id"])
+        add(sid, "created", f"₹{total:,.2f} carried forward from {len(items)} invoice(s)", "created")
     return out
 
 
@@ -13102,7 +13194,10 @@ async def fee_carry_forward(payload: dict = Body(...), user: dict = Depends(requ
         raise HTTPException(status_code=409, detail="Only an executed promotion run can carry dues forward")
     decs = await db.promotion_decisions.find({"run_id": run["id"], "decision": {"$in": ["promote", "detain"]}},
                                              {"_id": 0, "student_id": 1}).to_list(50000)
-    return await _carry_forward_dues(iid, run["from_year"], run["to_year"], [d["student_id"] for d in decs], user, run["id"])
+    out = await _carry_forward_dues(iid, run["from_year"], run["to_year"], [d["student_id"] for d in decs], user, run["id"])
+    crun = await phase59.save_run(user, "dues_carry_forward", f"Dues carry-forward {run['from_year']} → {run['to_year']}", out["items"],
+                                  ref_id=run["id"], extra={"amount": out["amount"]})
+    return {**out, "run_id": crun["run_id"], "summary": crun["summary"]}
 
 
 @api.get("/fees/monthly-summary")
@@ -14323,6 +14418,7 @@ async def reset_status(user: dict = Depends(require_roles("platform_admin"))):
 
 
 import phase58  # noqa: E402,F401  (Phase 58 routes register on `api`)
+import phase59  # noqa: E402,F401  (Phase 59 routes register on `api`)
 
 app.include_router(api)
 

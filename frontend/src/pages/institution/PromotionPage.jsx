@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import api, { errText } from "../../lib/api";
+import { bulkToast } from "../../components/bulk/BulkResultDialog";
 import { inr } from "../../lib/fees";
 import { useAuth } from "../../context/AuthContext";
 import { Button } from "../../components/ui/button";
@@ -227,7 +228,9 @@ export default function PromotionPage() {
     try {
       const { data } = await api.post(`/promotion/${run.id}/execute`);
       const cf = data.dues_carry_forward;
-      toast.success(`Executed — promoted ${data.summary.promote}, detained ${data.summary.detain}, graduated ${data.summary.graduate}, transferred ${data.summary.transfer_out}${cf?.created ? ` · dues of ${cf.created} students carried forward (${inr(cf.amount)})` : ""}`);
+      bulkToast(toast, { title: `Promotion ${run.from_year} → ${run.to_year}`, items: data.items, summary: data.run_summary }, null,
+        `Executed — promoted ${data.summary.promote}, detained ${data.summary.detain}, graduated ${data.summary.graduate}, transferred ${data.summary.transfer_out}: `);
+      if (cf?.items?.length) bulkToast(toast, { title: `Dues carry-forward ${run.from_year} → ${run.to_year}`, items: cf.items, summary: cf.summary }, null, `Dues carry-forward (${inr(cf.amount)}): `);
       setConfirmExec(false); setExecText(""); loadRun(run.id);
     } catch (e) { toast.error(errText(e)); } finally { setBusy(false); }
   };

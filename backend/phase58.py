@@ -493,6 +493,8 @@ async def _post_message(t, user, body, attachment, nudge=True):
                                                                   "last_sender_role": m["sender_role"], f"reads.{user['id']}": now}})
     await S.audit(user, "chat_message", "parent_threads", t["id"], f"{t['student_name']} · {len(text)} chars"
                   + (" + attachment" if attachment else ""), t["institution_id"])
+    import phase59
+    await phase59.emit(t, {"type": "message", "message_id": m["id"], "sender_id": user["id"]})
     nudge_res = None
     title = f"New message about {t['student_name']}"
     if m["sender_role"] == "staff":
@@ -574,6 +576,9 @@ async def get_thread(tid: str, user: dict = Depends(S.get_current_user)):
             m.update(body="This message was hidden by the school.", attachment=None)
         m.pop("nudge", None) if user["role"] == "parent" else None
     await db.parent_threads.update_one({"id": tid}, {"$set": {f"reads.{user['id']}": S.now_iso()}})
+    import phase59
+    if any(m["sender_id"] != user["id"] and m["created_at"] > reads.get(user["id"], "") for m in msgs):
+        await phase59.emit(t, {"type": "read", "user_id": user["id"]}, exclude=user["id"])
     await db.notifications.update_many({"user_id": user["id"], "type": "parent_message", "related_id": tid, "read": False}, {"$set": {"read": True}})
     t = await db.parent_threads.find_one({"id": tid}, {"_id": 0})
     view = await thread_view(t, user["id"])
@@ -615,6 +620,8 @@ async def set_thread_status(tid: str, payload: dict = Body(...), user: dict = De
         raise HTTPException(status_code=409, detail="There's already an open conversation for this child — continue there")
     await db.parent_threads.update_one({"id": tid}, {"$set": {"status": st, f"{st}_by": user.get("name"), f"{st}_at": S.now_iso()}})
     await S.audit(user, f"chat_thread_{st}", "parent_threads", tid, t["student_name"], t["institution_id"])
+    import phase59
+    await phase59.emit(t, {"type": "status", "status": st})
     return {"ok": True, "status": st}
 
 
