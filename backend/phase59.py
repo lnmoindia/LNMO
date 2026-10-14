@@ -24,7 +24,7 @@ def fix(type_, target):
     return {"type": type_, "target": target}
 
 
-async def save_run(user, kind, title, items, ref_id=None, extra=None, notify=True):
+async def save_run(user, kind, title, items, ref_id=None, extra=None, notify=True, parent_run_id=None):
     """Persist one bulk run and return {run_id, summary, items} to merge into the endpoint's legacy response."""
     summary = {k: 0 for k in ("created", "sent", "linked", "skipped", "failed")}
     for it in items:
@@ -32,12 +32,12 @@ async def save_run(user, kind, title, items, ref_id=None, extra=None, notify=Tru
     summary["total"] = len(items)
     summary.update(extra or {})
     run = {"id": str(uuid.uuid4()), "institution_id": user.get("institution_id"), "kind": kind, "ref_id": ref_id, "title": title,
-           "summary": summary, "items": items, "actor_id": user["id"], "actor_name": user.get("name"), "created_at": S.now_iso()}
+           "summary": summary, "items": items, "parent_run_id": parent_run_id, "actor_id": user["id"], "actor_name": user.get("name"), "created_at": S.now_iso()}
     await db.bulk_runs.insert_one(dict(run))
     if notify and user.get("institution_id"):
         bits = ", ".join(f"{v} {k}" for k, v in summary.items() if k in ("created", "sent", "linked", "skipped", "failed") and v)
         await S._notify(user["institution_id"], user["id"], "bulk_result", title, bits or "Nothing to do", run["id"])
-    return {"run_id": run["id"], "summary": summary, "items": items}
+    return {"run_id": run["id"], "summary": summary, "items": items, "parent_run_id": parent_run_id}
 
 
 @api.get("/bulk-runs/{rid}")
@@ -93,18 +93,19 @@ def invite_items(res):
     for r in res.get("invited", []):
         per = r.get("channels") or {}
         failed = r.get("delivery") == "failed"
-        chan = ", ".join(f"{k}: {v.replace('skipped_', 'no ').replace('_', ' ')}" for k, v in per.items() if k in P.INVITE_CHANNELS)
+        chan = ", ".join(f"{k}: {v.replace('skipped_no_', 'no ').replace('skipped_', 'skipped ').replace('_', ' ')}" for k, v in per.items() if k in P.INVITE_CHANNELS)
         reason = ("Linked to sibling's parent account" if r.get("action") == "linked_sibling" else "Invite sent") + (f" ({chan})" if chan else "")
         out.append(item(r["student_id"], r["student_name"], "failed" if failed else ("linked" if r.get("action") == "linked_sibling" else "sent"),
                         "Delivery failed on every channel" + (f" ({chan})" if chan else "") if failed else reason,
-                        "delivery_failed" if failed else r.get("action"), f"{r.get('class') or ''} · {r.get('phone') or ''}", fix("open_student", r["student_id"])))
+                        "delivery_failed" if failed else r.get("action"), f"{r.get('class') or ''} · {r.get('phone') or r.get('email') or ''}", fix("open_student", r["student_id"])))
     for r in res.get("already_linked", []):
         out.append(item(r["student_id"], r["student_name"], "skipped", "A parent account is already linked", "already_linked", r.get("class"), fix("open_student", r["student_id"])))
     for r in res.get("skipped_no_phone", []):
-        out.append(item(r["student_id"], r["student_name"], "skipped", "No guardian phone on file — add one or print a paper slip", "no_phone",
-                        r.get("class"), fix("open_student", r["student_id"])))
+        out.append(item(r["student_id"], r["student_name"], "skipped",
+                        "No phone — select Email" if r.get("email_only") else "No guardian phone or email on file — add one or print a paper slip",
+                        "no_phone_select_email" if r.get("email_only") else "no_phone", r.get("class"), fix("open_student", r["student_id"])))
     for r in res.get("collisions_for_review", []):
-        out.append(item(r["student_id"], r["student_name"], "skipped", "Phone number is shared with a different guardian name — review before inviting",
+        out.append(item(r["student_id"], r["student_name"], "skipped", r.get("reason") or "Phone number is shared with a different guardian name — review before inviting",
                         "phone_collision", r.get("class"), fix("open_student", r["student_id"])))
     return out
 

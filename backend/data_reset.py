@@ -43,6 +43,7 @@ DELETE = {
     "audit_logs": "Audit logs", "issues": "Support tickets & crash reports",
     "parent_threads": "Parent chat threads", "parent_messages": "Parent chat messages",
     "bulk_runs": "Bulk-action results", "quick_replies": "Chat quick replies",
+    "parent_setup_tokens": "Parent setup links",
 }
 
 CLASSIFIED = set(KEEP) | set(PARTIAL) | set(DELETE)

@@ -209,6 +209,10 @@ export default function ParentDetailPage() {
           <dl className="px-5 py-3 text-sm divide-y divide-slate-100 dark:divide-slate-800/60">
             <div className="py-2 flex justify-between"><dt className="text-slate-400">Method</dt><dd className="font-medium first-letter:uppercase" data-testid="parent-onboarding-method">{d.onboarding.method}</dd></div>
             <div className="py-2 flex justify-between"><dt className="text-slate-400">First invited</dt><dd className="font-medium">{day(d.onboarding.invited_at, tz)}</dd></div>
+            {d.onboarding.link && (
+              <div className="py-2 flex justify-between gap-3" data-testid="parent-onboarding-link"><dt className="text-slate-400">Setup link</dt>
+                <dd className="font-medium text-right text-xs">{d.onboarding.link.used_at ? `Completed ${day(d.onboarding.link.used_at, tz)}` : d.onboarding.link.invalidated_at ? "Replaced by a newer invite" : d.onboarding.link.opened_at ? `Opened ${day(d.onboarding.link.opened_at, tz)}` : "Not opened yet"} · expires {day(d.onboarding.link.expires_at, tz)}</dd></div>
+            )}
             <div className="py-2 flex justify-between"><dt className="text-slate-400">Account created</dt><dd className="font-medium">{day(p.created_at, tz)}</dd></div>
             <div className="py-2 flex justify-between"><dt className="text-slate-400">Login</dt><dd className="font-medium text-xs">{p.login_email}</dd></div>
           </dl>

@@ -7,8 +7,8 @@ import { Button } from "../../components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 
 export const staffBase = (pathname) => (pathname.startsWith("/teacher") ? "/teacher" : "/app");
-const STATUS = { linked: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400", invited: "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400", not_invited: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400" };
-const LABEL = { linked: "Linked", invited: "Invited", not_invited: "Not invited" };
+const STATUS = { linked: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400", invited: "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400", link_opened: "bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300", expired: "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300", not_invited: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400" };
+const LABEL = { linked: "Linked", invited: "Invited", link_opened: "Link opened", expired: "Link expired", not_invited: "Not invited" };
 export const StatusPill = ({ s }) => <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${STATUS[s]}`} data-testid={`parent-status-${s}`}>{LABEL[s]}</span>;
 
 export default function ParentsPage() {
@@ -58,7 +58,8 @@ export default function ParentsPage() {
           <SelectTrigger className="w-44" data-testid="parents-status-filter"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Any status</SelectItem><SelectItem value="linked">Linked</SelectItem>
-            <SelectItem value="invited">Invited</SelectItem><SelectItem value="not_invited">Not invited</SelectItem>
+            <SelectItem value="invited">Invited</SelectItem><SelectItem value="link_opened">Link opened</SelectItem>
+            <SelectItem value="expired">Link expired</SelectItem><SelectItem value="not_invited">Not invited</SelectItem>
           </SelectContent>
         </Select>
       </div>

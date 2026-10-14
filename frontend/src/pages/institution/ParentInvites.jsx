@@ -179,7 +179,10 @@ export function ReadyToInvitePanel({ refreshKey }) {
     try {
       const { data } = await api.post(`/students/${sid}/invite-parent`, { channels });
       const per = data.invited[0]?.channels;
-      toast.success(data.invited.length ? `Invite ${data.invited[0].delivery}${per ? ` · ${Object.entries(per).filter(([k]) => !k.startsWith("email_")).map(([k, v]) => `${k}: ${v.replace("skipped_", "")}`).join(", ")}` : ""}` : "No invite needed");
+      const noPhone = data.skipped_no_phone?.length || 0;
+      if (data.invited.length) toast.success(`Invite ${data.invited[0].delivery}${per ? ` · ${Object.entries(per).filter(([k]) => !k.startsWith("email_")).map(([k, v]) => `${k}: ${v.replace("skipped_", "")}`).join(", ")}` : ""}`);
+      else if (noPhone) toast.warning(`${noPhone} skipped — no phone, select Email`, { action: { label: "View details", onClick: () => showBulkResult({ title: "Parent invite", ...data }) }, duration: 12000 });
+      else toast.success("No invite needed");
       load();
     } catch (e) { toast.error(errText(e)); } finally { setBusy(""); }
   };
@@ -206,7 +209,8 @@ export function ReadyToInvitePanel({ refreshKey }) {
           <ul className="divide-y divide-indigo-100 dark:divide-indigo-500/20 max-h-48 overflow-y-auto">
             {ready.map((r) => (
               <li key={r.student_id} className="flex items-center justify-between py-1.5 text-sm" data-testid={`ready-row-${r.student_id}`}>
-                <span className="text-slate-800 dark:text-slate-100">{r.student_name} <span className="text-xs text-slate-500">· {r.class} · {r.phone}</span>
+                <span className="text-slate-800 dark:text-slate-100">{r.student_name} <span className="text-xs text-slate-500">· {r.class}{r.phone ? ` · ${r.phone}` : ""}</span>
+                  {r.email_only && <span className={`ml-1.5 rounded px-1.5 text-[10px] font-semibold ${channels.includes("email") ? "bg-indigo-50 text-indigo-700" : "bg-amber-50 text-amber-700"}`} data-testid={`ready-email-only-${r.student_id}`}>{channels.includes("email") ? "Email only" : "Email only — select Email"}</span>}
                   {!r.has_email && channels.includes("email") && <span className="ml-1.5 rounded bg-slate-100 dark:bg-slate-800 px-1.5 text-[10px] text-slate-500" data-testid={`ready-no-email-${r.student_id}`}>no email</span>}</span>
                 <Button size="sm" variant="outline" disabled={busy === r.student_id || !channels.length} onClick={() => inviteOne(r.student_id)} data-testid={`ready-invite-${r.student_id}`}>
                   <Send size={12} className="mr-1" /> Invite

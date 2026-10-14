@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Download, RotateCcw, ExternalLink, CheckCircle2, MinusCircle, XCircle, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Button } from "../ui/button";
+import { BulkEnrolDialog } from "./BulkEnrolDialog";
 
 const OK = ["created", "sent", "linked"];
 const CHIPS = [["all", "All"], ["ok", "Done"], ["skipped", "Skipped"], ["failed", "Failed"]];
@@ -16,9 +17,13 @@ const Icon = ({ s }) => (OK.includes(s) ? <CheckCircle2 size={14} className="tex
 
 export const summaryText = (sm) => !sm ? "" : ["created", "sent", "linked", "skipped", "failed"].filter((k) => sm[k]).map((k) => `${sm[k]} ${k}`).join(" · ") || "Nothing to do";
 
-export function BulkResultView({ run, onRetry, retrying, compact }) {
+export function BulkResultView({ run, onRetry, retrying, compact, nested }) {
   const navigate = useNavigate();
   const [chip, setChip] = useState("all");
+  const [enrolOpen, setEnrolOpen] = useState(false);
+  const [follow, setFollow] = useState(null);
+  const notEnrolled = (run?.items || []).filter((i) => i.reason_code === "not_enrolled").length;
+  const runId = run?.run_id || run?.id;
   const items = useMemo(() => (run?.items || []).filter((i) => chip === "all" || (chip === "ok" ? OK.includes(i.status) : i.status === chip)), [run, chip]);
   const count = (c) => (run?.items || []).filter((i) => (c === "all" ? true : c === "ok" ? OK.includes(i.status) : i.status === c)).length;
   const csv = () => {
@@ -40,6 +45,7 @@ export function BulkResultView({ run, onRetry, retrying, compact }) {
           ))}
         </div>
         <div className="flex gap-1.5">
+          {!nested && notEnrolled > 0 && runId && <Button size="sm" onClick={() => setEnrolOpen(true)} className="bg-indigo-700 hover:bg-indigo-800 text-white" data-testid="bulk-enrol-all-btn">Enrol all not-enrolled ({notEnrolled})</Button>}
           {onRetry && <Button size="sm" variant="outline" onClick={onRetry} disabled={retrying} data-testid="bulk-retry-btn">{retrying ? <Loader2 size={13} className="mr-1 animate-spin" /> : <RotateCcw size={13} className="mr-1" />} Retry</Button>}
           <Button size="sm" variant="outline" onClick={csv} data-testid="bulk-csv-btn"><Download size={13} className="mr-1" /> CSV</Button>
         </div>
@@ -68,9 +74,29 @@ export function BulkResultView({ run, onRetry, retrying, compact }) {
           </tbody>
         </table>
       </div>
+      {!nested && runId && <BulkEnrolDialog runId={runId} open={enrolOpen} onClose={() => setEnrolOpen(false)} onDone={(data) => { setEnrolOpen(false); setFollow(data); }} />}
+      {follow && <FollowUp follow={follow} />}
     </div>
   );
 }
+
+function FollowUp({ follow }) {
+  const View = NestedView;
+  return (
+    <>
+      {(
+        <div className="space-y-3 rounded-xl border border-indigo-200 dark:border-indigo-500/30 p-3" data-testid="bulk-enrol-result">
+          <p className="text-sm font-semibold">Enrolment: {summaryText(follow.summary)}</p>
+          <View run={{ title: "Enrolment", ...follow }} />
+          {follow.retry && <p className="text-sm font-semibold" data-testid="bulk-retry-summary">{follow.retry.title}: {summaryText(follow.retry.summary)}</p>}
+          {follow.retry && <View run={follow.retry} />}
+        </div>
+      )}
+    </>
+  );
+}
+
+const NestedView = (props) => BulkResultView({ ...props, compact: true, nested: true });
 
 export default function BulkResultDialog({ run, open, onClose, onRetry, retrying }) {
   return (

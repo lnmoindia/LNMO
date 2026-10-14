@@ -5951,8 +5951,40 @@ async def _run_parent_invites(iid, student_list, channel, actor):
         sname = f"{s.get('first_name','')} {s.get('last_name','')}".strip()
         cls = (s.get("class_name") or "") + (f" {s.get('section')}" if s.get("section") else "")
         phone = _norm_phone(s.get("guardian_phone"))
+        gmail = (s.get("guardian_email") or "").strip().lower()
+        gmail = gmail if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", gmail) else ""
         if not phone:
-            skipped_no_phone.append({"student_id": sid, "student_name": sname, "class": cls, "admission_no": s.get("admission_no")})
+            if not gmail or "email" not in channels:
+                skipped_no_phone.append({"student_id": sid, "student_name": sname, "class": cls, "admission_no": s.get("admission_no"),
+                                         "email_only": bool(gmail)})
+                continue
+            # Phase 60: email-only guardian → parent account keyed on the email (case-insensitive, unique across users)
+            other = created_cache.get(gmail) or await db.users.find_one({"email": gmail}, {"_id": 0, "password_hash": 0})
+            if other and (other.get("role") != "parent" or other.get("institution_id") != iid):
+                collisions.append({"student_id": sid, "student_name": sname, "class": cls, "phone": None, "guardian_name": s.get("guardian_name"),
+                                   "reason": "This email already belongs to another account"})
+                continue
+            if other:
+                if sid in (other.get("student_ids") or []):
+                    already_linked.append({"student_id": sid, "student_name": sname, "class": cls})
+                else:
+                    await db.users.update_one({"id": other["id"]}, {"$addToSet": {"student_ids": sid}})
+                    other.setdefault("student_ids", []).append(sid)
+                    invited.append({"student_id": sid, "student_name": sname, "class": cls, "phone": None, "email": gmail, "action": "linked_sibling"})
+                continue
+            uid = str(uuid.uuid4())
+            await db.users.insert_one({"id": uid, "name": s.get("guardian_name") or f"Parent of {sname}", "email": gmail, "phone": None,
+                                       "password_hash": hash_password(secrets.token_urlsafe(10)), "role": "parent", "student_ids": [sid],
+                                       "institution_id": iid, "status": "active", "must_change_password": True, "invited": True,
+                                       "invite_identifier": "email", "created_at": now_iso()})
+            created_cache[gmail] = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0})
+            per = await phase58.send_invite_multi(iid, school_name, created_cache[gmail], channels, [sname])
+            status = phase58.overall(per)
+            await db.parent_invites.insert_one({"id": str(uuid.uuid4()), "institution_id": iid, "student_id": sid, "parent_user_id": uid,
+                                                "phone": None, "email": gmail, "status": status, "channel": ",".join(channels),
+                                                "channels": per, "sent_at": now_iso()})
+            invited.append({"student_id": sid, "student_name": sname, "class": cls, "phone": None, "email": gmail,
+                            "action": "created", "delivery": status, "channels": per})
             continue
         group = phone_groups.get(phone, [])
         names = {_gname_key(g.get("guardian_name")) for g in group if _gname_key(g.get("guardian_name"))}
@@ -5961,6 +5993,14 @@ async def _run_parent_invites(iid, student_list, channel, actor):
                                "phone": phone, "guardian_name": s.get("guardian_name")})
             continue
         existing = created_cache.get(phone) or await _parent_by_phone(iid, phone)
+        if not existing and gmail:
+            # an email-only parent already exists for this guardian → attach the phone, don't duplicate
+            existing = await db.users.find_one({"email": gmail, "institution_id": iid, "role": "parent"}, {"_id": 0, "password_hash": 0})
+            if existing and not existing.get("phone"):
+                await db.users.update_one({"id": existing["id"]}, {"$set": {"phone": phone}})
+                existing["phone"] = phone
+            elif existing:
+                existing = None
         if existing:
             if sid in (existing.get("student_ids") or []):
                 already_linked.append({"student_id": sid, "student_name": sname, "class": cls})
@@ -5974,8 +6014,7 @@ async def _run_parent_invites(iid, student_list, channel, actor):
             continue
         uid = str(uuid.uuid4())
         login_email = f"p{phone}@{slug}.parent.invite"
-        gmail = (s.get("guardian_email") or "").strip().lower()
-        if gmail and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", gmail) and not await db.users.find_one({"email": gmail}, {"_id": 1}):
+        if gmail and not await db.users.find_one({"email": gmail}, {"_id": 1}):
             login_email = gmail
         pname = s.get("guardian_name") or f"Parent of {sname}"
         await db.users.insert_one({"id": uid, "name": pname, "email": login_email, "phone": phone,
@@ -6027,12 +6066,13 @@ async def invite_single_parent(student_id: str, payload: dict = Body(default={})
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
     await guard_principal_class(user, s.get("class_name"))
-    return await _run_parent_invites(iid, [s], channel, user)
+    res = await _run_parent_invites(iid, [s], channel, user)
+    return {**res, **(await phase59.save_run(user, "parent_invite", "Parent invite", phase59.invite_items(res), notify=False))}
 
 
 @api.get("/students/ready-to-invite")
 async def ready_to_invite(user: dict = Depends(require_admin_or_principal)):
-    """Enrolled students with a guardian phone but no linked parent account yet."""
+    """Enrolled students with a guardian phone (or, since Phase 60, only an email) but no linked parent account yet."""
     iid = user["institution_id"]
     allowed = await _comm_scope_class_names(user)
     linked = await _linked_student_ids(iid)
@@ -6043,9 +6083,10 @@ async def ready_to_invite(user: dict = Depends(require_admin_or_principal)):
     async for s in db.students.find(q, {"_id": 0}):
         if s["id"] in linked:
             continue
-        if not _norm_phone(s.get("guardian_phone")):
+        if not _norm_phone(s.get("guardian_phone")) and not (s.get("guardian_email") or "").strip():
             continue
         rows.append({"student_id": s["id"], "student_name": f"{s.get('first_name','')} {s.get('last_name','')}".strip(),
+                     "email_only": not _norm_phone(s.get("guardian_phone")),
                      "class": (s.get("class_name") or "") + (f" {s.get('section')}" if s.get("section") else ""),
                      "guardian_name": s.get("guardian_name"), "phone": _norm_phone(s.get("guardian_phone")),
                      "has_email": bool((s.get("guardian_email") or "").strip())})
@@ -6107,7 +6148,8 @@ async def _issue_setup_code(iid, s, school_name, actor_email):
                                             "created_by": actor_email, "created_at": now_iso()})
     return {"student_id": s["id"], "code": code, "student_name": f"{s.get('first_name','')} {s.get('last_name','')}".strip(),
             "admission_no": s.get("admission_no"), "class": (s.get("class_name") or "") + (f" {s.get('section')}" if s.get("section") else ""),
-            "school_name": school_name, "expires_in_days": 14}
+            "school_name": school_name, "expires_in_days": 14,
+            "email_hint": (s.get("guardian_email") or "").strip() if not _norm_phone(s.get("guardian_phone")) else None}
 
 
 async def _school_logo_src(iid):
@@ -6232,7 +6274,7 @@ async def invite_reminder(payload: dict = Body(...), user: dict = Depends(requir
     for r in results:
         per = r["channels"]
         st_ = phase58.overall(per)
-        chan = ", ".join(f"{k}: {v.replace('skipped_', 'no ').replace('_', ' ')}" for k, v in per.items() if k in phase58.INVITE_CHANNELS)
+        chan = ", ".join(f"{k}: {v.replace('skipped_no_', 'no ').replace('skipped_', 'skipped ').replace('_', ' ')}" for k, v in per.items() if k in phase58.INVITE_CHANNELS)
         ritems.append(phase59.item(r["parent_id"], r["name"], {"sent": "sent", "failed": "failed"}.get(st_, "skipped"),
                                    f"Reminder {st_} ({chan})", st_, cls["name"], phase59.fix("open_parent", r["parent_id"])))
     run = await phase59.save_run(user, "invite_reminder", f"Invite reminders · {cls['name']}", ritems, ref_id=cls["id"])
@@ -6242,16 +6284,21 @@ async def invite_reminder(payload: dict = Body(...), user: dict = Depends(requir
 # ---- Public (unauthenticated) parent onboarding ----
 @api.get("/public/parent-setup/{token}")
 async def public_parent_setup_resolve(token: str):
-    data = _verify_secure_link(token)
-    if not data or not str(data.get("ref", "")).startswith("psetup:"):
-        raise HTTPException(status_code=400, detail="This invite link is invalid or has expired")
-    uid = data["ref"].split("psetup:", 1)[1]
+    if "." not in token:  # Phase 60 single-use hashed token
+        uid, _ = await phase60.resolve_new_token(token)
+    else:
+        data = _verify_secure_link(token)
+        if not data or not str(data.get("ref", "")).startswith("psetup:"):
+            raise HTTPException(status_code=400, detail="This invite link is invalid or has expired")
+        uid = data["ref"].split("psetup:", 1)[1]
     u = await db.users.find_one({"id": uid, "role": "parent"}, {"_id": 0})
     if not u:
         raise HTTPException(status_code=404, detail="Account not found")
     school = await db.institutions.find_one({"id": u["institution_id"]}, {"_id": 0, "name": 1})
     kids = await db.students.find({"id": {"$in": u.get("student_ids") or []}}, {"_id": 0, "first_name": 1, "last_name": 1, "class_name": 1, "section": 1}).to_list(50)
-    return {"school_name": (school or {}).get("name"), "parent_name": u.get("name"),
+    sch = await db.institutions.find_one({"id": u["institution_id"]}, {"_id": 0}) or {}
+    return {"school_name": (school or {}).get("name"), "parent_name": u.get("name"), "single_use": "." not in token,
+            "branding": _login_branding(sch), "login_key": sch.get("slug") or (sch.get("code") or "").lower(),
             "login_email": u.get("email"), "phone": u.get("phone"), "needs_password": bool(u.get("must_change_password")),
             "children": [{"name": f"{k.get('first_name','')} {k.get('last_name','')}".strip(),
                           "class": (k.get("class_name") or "") + (f" {k.get('section')}" if k.get("section") else "")} for k in kids]}
@@ -6259,6 +6306,8 @@ async def public_parent_setup_resolve(token: str):
 
 @api.post("/public/parent-setup/{token}")
 async def public_parent_setup_complete(token: str, response: Response, payload: dict = Body(...)):
+    if "." not in token:
+        return await phase60.complete_new_token(token, response, payload)
     data = _verify_secure_link(token)
     if not data or not str(data.get("ref", "")).startswith("psetup:"):
         raise HTTPException(status_code=400, detail="This invite link is invalid or has expired")
@@ -12146,6 +12195,10 @@ async def unarchive_fee_structure(sid: str, user: dict = Depends(require_roles("
 @api.post("/fees/structures/{sid}/apply")
 async def apply_fee_structure(sid: str, user: dict = Depends(require_fee_admin)):
     """Create a fee account for every enrolled student in the structure's unit/class (idempotent)."""
+    return await _apply_structure(sid, user)
+
+
+async def _apply_structure(sid, user, only_ids=None, parent_run_id=None):
     iid = user["institution_id"]
     st = await _get_structure(iid, sid)
     _require_not_archived(st, "apply it to students")
@@ -12156,7 +12209,10 @@ async def apply_fee_structure(sid: str, user: dict = Depends(require_fee_admin))
     created, skipped, items = 0, [], []
     B, yr = phase59, st["academic_year"]
     snames = {x["id"]: x["name"] async for x in db.fee_structures.find({"institution_id": iid}, {"_id": 0, "id": 1, "name": 1})}
-    async for s in db.students.find({"institution_id": iid, "class_name": {"$in": names}}, {"_id": 0}).sort([("class_name", 1), ("first_name", 1)]):
+    sq = {"institution_id": iid, "class_name": {"$in": names}}
+    if only_ids is not None:
+        sq["id"] = {"$in": list(only_ids)}
+    async for s in db.students.find(sq, {"_id": 0}).sort([("class_name", 1), ("first_name", 1)]):
         sname = f"{s.get('first_name', '')} {s.get('last_name', '')}".strip()
         sub = f"{s.get('admission_no') or '—'} · {s.get('class_name') or ''} {s.get('section') or ''}".strip()
 
@@ -12194,7 +12250,8 @@ async def apply_fee_structure(sid: str, user: dict = Depends(require_fee_admin))
         except Exception as e:  # noqa: BLE001
             items.append(B.item(s["id"], sname, "failed", f"Could not create the account: {e}", "error", sub, B.fix("open_student", s["id"])))
     await audit(user, "fee_structure_apply", "fee_accounts", sid, f"{created} accounts · {len(skipped)} skipped · {st['name']}", iid)
-    run = await B.save_run(user, "fee_apply", f"Apply '{st['name']}' to students", items, ref_id=sid)
+    run = await B.save_run(user, "fee_apply", f"Apply '{st['name']}' to students" + (" (retry after enrolling)" if parent_run_id else ""),
+                           items, ref_id=sid, parent_run_id=parent_run_id)
     return {"created": created, "skipped": skipped, **run}
 
 
@@ -14419,6 +14476,7 @@ async def reset_status(user: dict = Depends(require_roles("platform_admin"))):
 
 import phase58  # noqa: E402,F401  (Phase 58 routes register on `api`)
 import phase59  # noqa: E402,F401  (Phase 59 routes register on `api`)
+import phase60  # noqa: E402,F401  (Phase 60 routes register on `api`)
 
 app.include_router(api)
 

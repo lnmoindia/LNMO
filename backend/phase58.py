@@ -100,9 +100,12 @@ async def list_parents(search: str = "", class_name: str = "", section: str = ""
         q = {"institution_id": iid, "role": "parent"}
         if scope is not None or class_name:
             q["student_ids"] = {"$in": list(kids)}
-        async for p in db.users.find(q, {"_id": 0, "password_hash": 0}):
+        import phase60
+        plist = await db.users.find(q, {"_id": 0, "password_hash": 0}).to_list(20000)
+        toks = await phase60.latest_tokens([p["id"] for p in plist])
+        for p in plist:
             children = [kids[k] for k in (p.get("student_ids") or []) if k in kids]
-            st = onboarding_status(p)
+            st = phase60.setup_status(p, toks.get(p["id"]))
             if status and st != status:
                 continue
             hay = " ".join([p.get("name") or "", p.get("phone") or "", real_email(p) or ""] + [sname(c) for c in children]).lower()
@@ -173,12 +176,16 @@ async def parent_detail(pid: str, user: dict = Depends(S.get_current_user)):
                                     "provider_message_id": 1, "error": 1, "recipient_email": 1, "recipient_phone": 1}).sort("created_at", -1).to_list(50)
     for m in comms:
         m["body"] = (m.get("body") or "")[:160]
+    import phase60
+    tok = (await phase60.latest_tokens([pid])).get(pid)
     return {"parent": {"id": p["id"], "name": p.get("name"), "phone": p.get("phone"), "email": real_email(p),
                        "login_email": p.get("email"), "relation": p.get("relation"), "preferred_channel": p.get("preferred_channel"),
                        "account_status": p.get("status") or "active", "must_change_password": bool(p.get("must_change_password")),
                        "created_at": p.get("created_at")},
             "children": children,
-            "onboarding": {"status": onboarding_status(p), "method": method, "invited_at": invites[0]["sent_at"] if invites else None,
+            "onboarding": {"status": phase60.setup_status(p, tok), "method": "email link" if p.get("setup_method") == "email_link" or p.get("invite_identifier") == "email" else method,
+                           "invited_at": invites[0]["sent_at"] if invites else None,
+                           "link": ({k: tok.get(k) for k in ("created_at", "expires_at", "opened_at", "used_at", "invalidated_at")} if tok else None),
                            "events": [{"at": i.get("sent_at"), "channel": i.get("channel"), "status": i.get("status"),
                                        "channels": i.get("channels")} for i in invites]},
             "last_login": (last or {}).get("timestamp"),
@@ -770,7 +777,7 @@ def parse_channels(payload: dict):
     return chans
 
 
-async def invite_email_html(iid, parent_name, children, link):
+async def invite_email_html(iid, parent_name, children, link, email=None, phone=None):
     inst = await db.institutions.find_one({"id": iid}, {"_id": 0}) or {}
     b = S._login_branding(inst)
     key = inst.get("slug") or (inst.get("code") or "").lower() or inst.get("domain") or ""
@@ -779,6 +786,7 @@ async def invite_email_html(iid, parent_name, children, link):
     logo = await S._school_logo_src(iid)
     e = S._html_escape
     kids = ", ".join(e(c) for c in children) or "your child"
+    how = "with your mobile number" if phone or not email else f"with your email address ({email})"
     color = inst.get("primary_color") or "#4338ca"
     logo_html = f'<img src="{e(logo)}" alt="" height="48" style="height:48px;margin-bottom:12px">' if logo and logo.startswith("https://") else ""
     html = (f'<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif;color:#111;font-size:14px;line-height:1.55">'
@@ -788,18 +796,18 @@ async def invite_email_html(iid, parent_name, children, link):
             f'<p>You are invited to the {e(inst.get("name") or "school")} parent portal for <b>{kids}</b> — see attendance, homework, results, fees and message the school.</p>'
             f'<p style="margin:20px 0"><a href="{e(link)}" style="background:{e(color)};color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Set up my account</a></p>'
             f'<ol style="padding-left:18px;margin:0 0 12px"><li>Tap <b>Set up my account</b> (the link works for 72 hours).</li>'
-            f'<li>Choose your password.</li><li>Next time, sign in at <a href="{e(login)}">{e(login)}</a> with your mobile number.</li></ol>'
+            f'<li>Choose your password.</li><li>Next time, sign in at <a href="{e(login)}">{e(login)}</a> {e(how)}.</li></ol>'
             f'<p style="font-size:12px;color:#666;word-break:break-all">Link not working? Paste this into your browser: {e(link)}</p>'
             f'<p style="font-size:12px;color:#888;margin-top:24px">Sent by {S.SUPPORT_FROM} for {e(inst.get("name") or "")}. '
             f'Questions? Contact the school office or {e(S._support_contact())}.</p></td></tr></table>')
     text = (f"Dear {parent_name or 'Parent'},\nYou are invited to the {inst.get('name')} parent portal for {', '.join(children)}.\n"
-            f"1) Open {link} (valid 72 hours)\n2) Choose your password\n3) Sign in at {login} with your mobile number.\n"
+            f"1) Open {link} (valid 72 hours)\n2) Choose your password\n3) Sign in at {login} {how}.\n"
             f"Questions? Contact the school office or {S._support_contact()}.")
     return html, text, inst.get("name")
 
 
-async def send_invite_email(iid, parent_uid, parent_name, email, children, link):
-    html, text, school = await invite_email_html(iid, parent_name, children, link)
+async def send_invite_email(iid, parent_uid, parent_name, email, children, link, phone=None):
+    html, text, school = await invite_email_html(iid, parent_name, children, link, email, phone)
     try:
         mid = await S._support_send(email, f"Your {school} parent portal invitation", html)
         status, err = ("sent", None) if mid else ("failed", "email_not_configured")
@@ -815,8 +823,6 @@ async def send_invite_email(iid, parent_uid, parent_name, email, children, link)
 
 async def send_invite_multi(iid, school_name, parent, channels, children):
     """Per-channel delivery for one parent; returns {channel: status} plus email message id."""
-    ref = "psetup:" + parent["id"]
-    link = f"{S.os.environ['PUBLIC_BASE_URL']}/setup/parent/{S._make_secure_link(iid, ref, 72)}"
     out = {}
     for ch in channels:
         if ch == "email":
@@ -824,7 +830,8 @@ async def send_invite_multi(iid, school_name, parent, channels, children):
             if not em:
                 out["email"] = "skipped_no_email"
                 continue
-            r = await send_invite_email(iid, parent["id"], parent.get("name"), em, children, link)
+            import phase60
+            r = await send_invite_email(iid, parent["id"], parent.get("name"), em, children, await phase60.mint_setup_link(iid, parent["id"]), parent.get("phone"))
             out["email"] = r["status"]
             out["email_message_id"] = r["message_id"]
             if r["error"]:

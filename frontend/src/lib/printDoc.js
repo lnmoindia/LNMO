@@ -178,7 +178,7 @@ function signatureRow(signers) {
 
 const fmtCode = (c) => (c && c.length === 8 ? `${c.slice(0, 4)}-${c.slice(4)}` : c);
 
-function slipHtml({ school_name, student_name, admission_no, class: cls, code, expires_in_days }, setupUrl, logoSrc, compact) {
+function slipHtml({ school_name, student_name, admission_no, class: cls, code, expires_in_days, email_hint }, setupUrl, logoSrc, compact) {
   const logo = logoSrc ? `<img src="${esc(logoSrc)}" alt="" class="slip-logo" />` : "";
   const adm = admission_no ? `<div class="slip-row"><span>Admission no.</span><b>${esc(admission_no)}</b></div>` : "";
   const how = admission_no
@@ -189,7 +189,8 @@ function slipHtml({ school_name, student_name, admission_no, class: cls, code, e
     <div class="slip-row"><span>Student</span><b>${esc(student_name)}</b></div>
     <div class="slip-row"><span>Class</span><b>${esc(cls)}</b></div>${adm}
     <div class="slip-code-label">Setup code</div><div class="slip-code">${esc(fmtCode(code))}</div>
-    <ol class="slip-steps"><li>Open <b>${esc(setupUrl)}</b></li><li>${how}</li><li>Sign in later with your mobile number.</li></ol>
+    ${email_hint ? `<div class="slip-row"><span>Email</span><b>Check ${esc(email_hint)} for your setup link</b></div>` : ""}
+    <ol class="slip-steps"><li>Open <b>${esc(setupUrl)}</b></li><li>${how}</li><li>Sign in later with your ${email_hint ? "email" : "mobile number"}.</li></ol>
     <div class="slip-foot">Single use · expires in ${esc(expires_in_days)} days · keep private</div>
   </div>`;
 }
