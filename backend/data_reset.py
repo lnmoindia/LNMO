@@ -41,6 +41,7 @@ DELETE = {
     "parent_invite_reminders": "Invite reminders", "parent_invite_reviews": "Invite reviews", "parent_setup_codes": "Parent setup codes",
     "otp_codes": "OTP codes", "password_resets": "Password reset links", "login_attempts": "Login lockouts",
     "audit_logs": "Audit logs", "issues": "Support tickets & crash reports",
+    "parent_threads": "Parent chat threads", "parent_messages": "Parent chat messages",
 }
 
 CLASSIFIED = set(KEEP) | set(PARTIAL) | set(DELETE)

@@ -8,6 +8,7 @@ import api, { errText } from "../../lib/api";
 import { toast } from "sonner";
 import { Button } from "../../components/ui/button";
 import { AccountLock } from "../../components/common/AccountLock";
+import { ResetPasswordButton } from "../../components/common/ResetPasswordDialog";
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -53,7 +54,7 @@ export default function TeacherProfileView() {
             </span>
             {p.employee_id && <span className="inline-flex items-center gap-1.5"><ClipboardList size={14} /> {p.employee_id}</span>}
           </div>
-          <div className="mt-2"><AccountLock userId={p.id} /></div>
+          <div className="mt-2 flex items-center gap-2 flex-wrap"><AccountLock userId={p.id} /><ResetPasswordButton userId={p.user_id || p.id} name={p.name} hasEmail={Boolean(p.email)} size="sm" /></div>
         </div>
       </div>
 

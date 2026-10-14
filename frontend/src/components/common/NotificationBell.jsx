@@ -39,6 +39,7 @@ export default function NotificationBell() {
     if (t.startsWith("absence") || t.startsWith("sub_"))
       return isTeacher ? "/teacher/substitutions" : "/app/substitutions";
     if (t === "timetable_published") return isTeacher ? "/teacher/timetable" : "/app/timetable";
+    if (t.startsWith("parent_message")) return `${isTeacher ? "/teacher" : "/app"}/parent-messages?t=${n.related_id}`;
     return isTeacher ? "/teacher/substitutions" : "/app/substitutions";
   }, [isTeacher]);
 

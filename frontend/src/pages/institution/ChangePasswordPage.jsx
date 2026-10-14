@@ -16,6 +16,7 @@ export default function ChangePasswordPage() {
   const [saving, setSaving] = useState(false);
 
   const submit = async () => {
+    if (user?.pw_set_by_staff && !(pw.length >= 8 && /[A-Z]/.test(pw) && /[a-z]/.test(pw) && /\d/.test(pw))) return toast.error("Use at least 8 characters with an uppercase letter, a lowercase letter and a number.");
     if (pw.length < 6) return toast.error("Password must be at least 6 characters");
     if (pw !== pw2) return toast.error("Passwords do not match");
     setSaving(true);
@@ -31,7 +32,8 @@ export default function ChangePasswordPage() {
       <div className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-8">
         <div className="h-12 w-12 rounded-xl bg-indigo-600 flex items-center justify-center mb-5"><KeyRound className="text-white" size={22} /></div>
         <h1 className="font-heading text-2xl font-bold text-slate-900 dark:text-slate-50">Set a new password</h1>
-        <p className="text-sm text-slate-500 mt-1 mb-6">For security, please choose your own password before continuing.</p>
+        <p className="text-sm text-slate-500 mt-1 mb-6" data-testid="change-password-intro">{user?.pw_set_by_staff ? "Your school reset your password. Choose your own new password before continuing." : "For security, please choose your own password before continuing."}</p>
+        {user?.pw_set_by_staff && <p className="text-xs text-slate-500 -mt-4 mb-5" data-testid="change-password-rule">At least 8 characters with an uppercase letter, a lowercase letter and a number.</p>}
         <div className="space-y-4">
           <div className="space-y-1.5"><Label>New password</Label><PasswordInput resetKey={saving} value={pw} onChange={(e) => setPw(e.target.value)} data-testid="new-password" /></div>
           <div className="space-y-1.5"><Label>Confirm password</Label><PasswordInput resetKey={saving} value={pw2} onChange={(e) => setPw2(e.target.value)} data-testid="confirm-password" /></div>

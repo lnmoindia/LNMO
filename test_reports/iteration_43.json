@@ -1,0 +1,33 @@
+{
+  "summary": "Phase 58 frontend tested on Sunrise demo (/login/sunrise). Verified Admin parents list + filters/search, Priya parent detail (hero, children w/ fee summary, onboarding, comms, chat panel, edit dialog with relation change + revert), student detail Parents/Guardians panel (link, Message navigates to parent-messages?t=<thread> with chat-thread, mailto Email). Staff chat thread: send text (bubble + char counter 35/2000), close/reopen (chat-closed-note toggles), file attach (chat-file-chip + image rendered). Class teacher lakshmi: /teacher/parents shows only Grade 8 A rows (2 linked + 4 not-invited), view-only (no parent-edit-btn), inbox /teacher/parent-messages shows Priya·Aarav thread. Deepa (9A) accessing Priya detail renders parent-detail-error 'This parent has no children in your classes'. Parent portal (parent.menon): portal-nav-messages w/ badge, portal-bell + badge, /parents/messages lists threads (parent-thread-*), reply works, mobile 390x844 portal-bnav-more sheet contains portal-more-messages. Reset password dialog on Users row: reset-password-dialog with reset-tab-set/email, reset-new-password-toggle, reset-generate-btn producing reset-generated-value. End-to-end forced change: created throwaway Student (p58ui6uqmdu@sunrise-demo.in), Set generated password committed, logged in -> /change-password with change-password-page + change-password-intro ('Your school reset your password. Choose your own new password before continuing.') and new-password/confirm-password fields. Invite channel picker on Students: invite-parents-dialog shows invite-channel-picker with All/WhatsApp/SMS/Email; unchecking all exposes invite-channel-error and disables invite-run-btn. ready-to-invite-panel shows ready-channel-picker and onboarding-progress-toggle expands to reveal reminder-channel-picker. No Sunrise demo passwords were reset and Priya's email/phone untouched (relation was briefly set to Mother then reverted to —).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ChangePasswordPage", "issue": "No submit button has a data-testid (e.g. change-password-submit). Only new-password & confirm-password inputs are tagged. Testing 'same password rejected' and 'strong password succeeds' required text-based button lookup.", "selector": "button on /change-password", "priority": "LOW"},
+      {"component": "UsersPage search", "issue": "Search input appears to treat '+' as space; searching for 'p58ui+6onanj@sunrise-demo.in' returned 'No records yet' even though the user exists. Searching for the suffix only worked.", "selector": "[data-testid=\"search-input\"]", "priority": "LOW"},
+      {"component": "Teacher Parent Chat inbox", "issue": "Teacher inbox thread list buttons don't carry parent-thread-<id> data-testid (only present in Parent portal + Institution ParentDetail). Visible thread exists ('Priya Menon · Aarav Menon') but can't be targeted by the documented testid on this page.", "selector": "/teacher/parent-messages thread rows", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_phase58.py (pre-existing, 5 passed per request)"],
+  "action_items": [
+    "Consider adding data-testid=\"change-password-submit\" (and a change-password-current field if backend expects it) for better test coverage of the forced-change flow.",
+    "Investigate Users page search treating '+' character as space (likely URL encoding issue); emails containing '+' alias cannot be found by exact search.",
+    "Add parent-thread-<id> data-testid to teacher inbox thread buttons for parity with parent portal + institution parent detail.",
+    "Cleanup: two throwaway Student users were created and deactivated (p58ui+6onanj@sunrise-demo.in, p58ui6uqmdu@sunrise-demo.in); feel free to purge if desired. Priya's chat has test staff messages ('Hello Priya — automated test ...' and 1 pix.png image attachment) and a parent reply bubble from parent.menon."
+  ],
+  "critical_code_review_comments": [
+    "ChangePasswordPage lacks a stable data-testid on the submit button, hampering automation of forced-change rejection/accept paths.",
+    "Users page search appears to interpret '+' in query as whitespace — likely a decodeURIComponent/URLSearchParams bug on client or server search param construction.",
+    "Teacher parent inbox uses a different list testid scheme than the other two surfaces — minor consistency gap."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (per existing tests/test_phase58.py: 5 passed)", "frontend": "~95%"},
+  "test_credentials": "admin@sunrise-demo.in, lakshmi@sunrise-demo.in, deepa@sunrise-demo.in, parent.menon@sunrise-demo.in — all Sunrise@2026 at /login/sunrise",
+  "seed_data_creation": "Created 2 throwaway Students (p58ui+6onanj@..., p58ui6uqmdu@...), both deactivated. Posted test chat messages + 1 image to Priya·Aarav thread.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 58 (Sunrise) frontend end-to-end verified. Only minor polish items (testids on change-password submit, search treating '+' as space, teacher inbox parent-thread testid). No Sunrise demo passwords touched. Priya's email/phone untouched. Throwaway users already deactivated; may be purged.",
+  "rca of the issue": "N/A — no critical issues found."
+}

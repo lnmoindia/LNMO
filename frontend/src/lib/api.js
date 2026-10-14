@@ -5,6 +5,14 @@ const api = axios.create({
   withCredentials: true,
 });
 
+api.interceptors.response.use(undefined, (e) => {
+  const d = e?.response?.data?.detail;
+  if (e?.response?.status === 403 && d?.code === "PASSWORD_CHANGE_REQUIRED" && window.location.pathname !== "/change-password") {
+    window.location.assign("/change-password");
+  }
+  return Promise.reject(e);
+});
+
 export const errText = (e) => {
   const d = e?.response?.data?.detail;
   if (typeof d === "string") return d;

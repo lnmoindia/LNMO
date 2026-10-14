@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Home, CalendarClock, BookMarked, CalendarCheck, Award, Wallet, Megaphone, Trophy, User, Users, LifeBuoy, Crown, Medal,
-  ChevronDown, Link2Off, Plus, AlertTriangle, ClipboardCheck, ArrowRight, Check,
+  ChevronDown, Link2Off, Plus, AlertTriangle, ClipboardCheck, ArrowRight, Check, MessageSquare,
 } from "lucide-react";
 import { toast } from "sonner";
 import api, { errText } from "../../lib/api";
@@ -18,6 +18,7 @@ import { useSchoolBrand } from "../portal/useSchoolBrand";
 import { TodayList, WeekGrid, NoticesList, ExamsList, ResultsBlock, Field, Chips, filterWork } from "../portal/PortalBlocks";
 import { pendingItems } from "../portal/PortalKit";
 import { LinkChildDialog } from "./LinkChildDialog";
+import ParentMessages from "./ParentMessages";
 
 const API_BASE = process.env.REACT_APP_BACKEND_URL;
 const NAV = [
@@ -27,6 +28,7 @@ const NAV = [
   { key: "attendance", label: "Attendance", icon: CalendarCheck },
   { key: "results", label: "Results", icon: Award },
   { key: "fees", label: "Fees", icon: Wallet },
+  { key: "messages", label: "Messages", icon: MessageSquare },
   { key: "notices", label: "Notices", icon: Megaphone },
   { key: "achievements", label: "Achievements", icon: Trophy },
   { key: "profile", label: "Child profile", icon: User },
@@ -60,8 +62,10 @@ export default function ParentPortal() {
     const want = sessionStorage.getItem("fee_link_child");
     sessionStorage.removeItem("fee_link_child");
     const pick = children.find((c) => c.id === want) || children[0];
-    navigate(`/parents/${page}?child=${pick.id}`, { replace: true });
-  }, [children, childParam, page, navigate]);
+    const keep = new URLSearchParams(search);
+    keep.set("child", pick.id);
+    navigate(`/parents/${page}?${keep.toString()}`, { replace: true });
+  }, [children, childParam, page, navigate, search]);
 
   if (!page || !NAV.some((n) => n.key === page)) {
     const target = qs.get("fees") === "1" ? "fees" : "home";
@@ -75,10 +79,10 @@ export default function ParentPortal() {
   return (
     <PortalShell brand={brand} label="Parent Portal" nav={NAV} bottom={BOTTOM} base="/parents" query={query} extra={switcher} testid="parent-portal">
       {children === null && <div className="h-40 rounded-2xl bg-slate-200/60 dark:bg-slate-800 animate-pulse" />}
-      {children?.length === 0 && page !== "account" && page !== "support" && (
+      {children?.length === 0 && !["account", "support", "messages"].includes(page) && (
         <PCard testid="parent-no-children"><PEmpty icon={Users} text="No children are linked to your account yet. Link a child from My account, or contact the school office." /></PCard>
       )}
-      {(page === "account" || page === "support") ? (
+      {page === "messages" ? (children && <ParentMessages kids={children} />) : (page === "account" || page === "support") ? (
         page === "account"
           ? <Account kids={children || []} onLink={() => setShowLink(true)} onChanged={loadChildren} />
           : <Support />

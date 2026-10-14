@@ -110,7 +110,14 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="User not found")
     if payload.get("tv", 0) != user.get("tv", 0):
         raise HTTPException(status_code=401, detail="Session expired — please sign in again")
+    if user.get("must_change_password") and request.url.path not in PW_CHANGE_ALLOWED:
+        raise HTTPException(status_code=403, detail={"code": "PASSWORD_CHANGE_REQUIRED",
+                                                     "msg": "Choose a new password before continuing."})
     return user
+
+
+# While must_change_password is set, only these authenticated routes work (public routes don't use auth).
+PW_CHANGE_ALLOWED = {"/api/auth/change-password", "/api/auth/me", "/api/auth/logout", "/api/platform/branding"}
 
 
 def require_roles(*roles):
@@ -769,6 +776,8 @@ async def create_resource(resource: str, payload: dict = Body(...), user: dict =
     if cfg["scope"] == "institution":
         doc["institution_id"] = user["institution_id"]
         await enrich_institution_doc(resource, doc, user)
+        if resource == "students":
+            await _assert_adm_unique(user["institution_id"], doc.get("admission_no"))
         if resource == "students" and not str(doc.get("admission_no") or "").strip():
             prefix, taken = await _adm_ctx(user["institution_id"])
             doc["admission_no"] = _next_adm(prefix, doc.get("class_name"), taken)
@@ -813,6 +822,8 @@ async def update_resource(resource: str, item_id: str, payload: dict = Body(...)
             and _doc_in_principal_scope(resource, {**existing, **updates}, _scope)):
         raise HTTPException(status_code=403, detail="Outside your assigned scope")
     merged = {**existing, **updates}
+    if resource == "students" and "admission_no" in updates and str(updates["admission_no"] or "").strip() != str(existing.get("admission_no") or "").strip():
+        await _assert_adm_unique(user["institution_id"], updates["admission_no"], exclude_id=item_id)
     if resource == "subject_offerings":
         normalize_offering_marks(merged)
         for k in ("has_practical", "max_marks", "theory_max_marks", "practical_max_marks"):
@@ -936,7 +947,7 @@ async def list_users(search: str = "", role: str = "", page: int = 1, limit: int
     if role:
         query["role"] = role
     if search:
-        query["$or"] = [{f: {"$regex": search, "$options": "i"}} for f in ("name", "email", "role")]
+        query["$or"] = [{f: {"$regex": re.escape(search), "$options": "i"}} for f in ("name", "email", "role")]
     total = await db.users.count_documents(query)
     skip = max(page - 1, 0) * limit
     items = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("created_at", -1).skip(skip).to_list(limit)
@@ -1272,6 +1283,9 @@ async def create_student_with_enrollment(payload: dict = Body(...),
     class_name = profile.get("class_name")
     section = profile.get("section")
     student = {**profile, "id": str(uuid.uuid4()), "institution_id": iid, "created_at": now_iso()}
+    await _assert_adm_unique(iid, student.get("admission_no"))
+    if student.get("admission_no"):
+        student["admission_no"] = str(student["admission_no"]).strip()
     if not str(student.get("admission_no") or "").strip():
         prefix, taken = await _adm_ctx(iid)
         student["admission_no"] = _next_adm(prefix, class_name if enroll else None, taken)
@@ -1507,10 +1521,21 @@ async def _backfill_admission_nos(iid):
 
 @api.get("/students/next-admission-no")
 async def next_admission_no(class_name: str = "", user: dict = Depends(require_admin_or_principal)):
-    if not re.search(r"\d+", class_name or ""):
-        raise HTTPException(status_code=400, detail="Select the student's class first — admission numbers are issued per grade")
     prefix, taken = await _adm_ctx(user["institution_id"])
-    return {"admission_no": _next_adm(prefix, class_name, taken)}
+    return {"admission_no": _next_adm(prefix, class_name, taken), "class_dependent": True,
+            "provisional": not re.search(r"\d+", class_name or "")}
+
+
+async def _assert_adm_unique(iid, adm, exclude_id=None):
+    """Admission numbers are unique per institution (case-insensitive, trimmed)."""
+    a = str(adm or "").strip()
+    if not a:
+        return
+    q = {"institution_id": iid, "admission_no": {"$regex": f"^\\s*{re.escape(a)}\\s*$", "$options": "i"}}
+    if exclude_id:
+        q["id"] = {"$ne": exclude_id}
+    if await db.students.find_one(q, {"_id": 1}):
+        raise HTTPException(status_code=409, detail=f"Admission number {a} is already used by another student")
 
 
 @api.post("/students/backfill-admission-nos")
@@ -5899,7 +5924,9 @@ async def _send_parent_invite(iid, school_name, parent_uid, parent_name, phone, 
 
 
 async def _run_parent_invites(iid, student_list, channel, actor):
-    """Phone-keyed invite over a student list. Returns the four buckets; sends via comm engine."""
+    """Phone-keyed invite over a student list. Returns the four buckets; sends via comm engine.
+    `channel` may be one channel or a list (Phase 58: whatsapp/sms/email)."""
+    channels = [channel] if isinstance(channel, str) else list(channel)
     school = await db.institutions.find_one({"id": iid}, {"_id": 0, "name": 1, "slug": 1, "code": 1})
     school_name = (school or {}).get("name")
     slug = ((school or {}).get("slug") or (school or {}).get("code") or "sch").lower()
@@ -5935,23 +5962,27 @@ async def _run_parent_invites(iid, student_list, channel, actor):
                 existing.setdefault("student_ids", []).append(sid)
                 await db.parent_invites.insert_one({"id": str(uuid.uuid4()), "institution_id": iid, "student_id": sid,
                                                     "parent_user_id": existing["id"], "phone": phone, "status": "linked",
-                                                    "channel": channel, "sent_at": now_iso()})
+                                                    "channel": ",".join(channels), "sent_at": now_iso()})
                 invited.append({"student_id": sid, "student_name": sname, "class": cls, "phone": phone, "action": "linked_sibling"})
             continue
         uid = str(uuid.uuid4())
         login_email = f"p{phone}@{slug}.parent.invite"
+        gmail = (s.get("guardian_email") or "").strip().lower()
+        if gmail and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", gmail) and not await db.users.find_one({"email": gmail}, {"_id": 1}):
+            login_email = gmail
         pname = s.get("guardian_name") or f"Parent of {sname}"
         await db.users.insert_one({"id": uid, "name": pname, "email": login_email, "phone": phone,
                                    "password_hash": hash_password(secrets.token_urlsafe(10)), "role": "parent",
                                    "student_ids": [sid], "institution_id": iid, "status": "active",
                                    "must_change_password": True, "invited": True, "created_at": now_iso()})
         created_cache[phone] = await db.users.find_one({"id": uid})
-        status = await _send_parent_invite(iid, school_name, uid, pname, phone, channel)
+        per = await phase58.send_invite_multi(iid, school_name, created_cache[phone], channels, [sname])
+        status = phase58.overall(per)
         await db.parent_invites.insert_one({"id": str(uuid.uuid4()), "institution_id": iid, "student_id": sid,
                                             "parent_user_id": uid, "phone": phone, "status": status,
-                                            "channel": channel, "sent_at": now_iso()})
+                                            "channel": ",".join(channels), "channels": per, "sent_at": now_iso()})
         invited.append({"student_id": sid, "student_name": sname, "class": cls, "phone": phone,
-                        "action": "created", "delivery": status})
+                        "action": "created", "delivery": status, "channels": per})
     if actor:
         await audit(actor, "invite_parents", "parent_invites", None, f"{len(invited)} invited, {len(collisions)} review", iid)
     return {"invited": invited, "already_linked": already_linked,
@@ -5974,9 +6005,7 @@ async def _invite_scope_students(iid, user, payload):
 @api.post("/students/invite-parents")
 async def invite_parents(payload: dict = Body(...), user: dict = Depends(require_admin_or_principal)):
     iid = user["institution_id"]
-    channel = payload.get("channel") or "whatsapp"
-    if channel not in COMM_CHANNELS:
-        raise HTTPException(status_code=400, detail="channel must be 'whatsapp' or 'sms'")
+    channel = phase58.parse_channels(payload)
     students = await _invite_scope_students(iid, user, payload)
     return await _run_parent_invites(iid, students, channel, user)
 
@@ -5984,7 +6013,7 @@ async def invite_parents(payload: dict = Body(...), user: dict = Depends(require
 @api.post("/students/{student_id}/invite-parent")
 async def invite_single_parent(student_id: str, payload: dict = Body(default={}), user: dict = Depends(require_admin_or_principal)):
     iid = user["institution_id"]
-    channel = (payload or {}).get("channel") or "whatsapp"
+    channel = phase58.parse_channels(payload or {})
     s = await db.students.find_one({"id": student_id, "institution_id": iid}, {"_id": 0})
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -6009,7 +6038,8 @@ async def ready_to_invite(user: dict = Depends(require_admin_or_principal)):
             continue
         rows.append({"student_id": s["id"], "student_name": f"{s.get('first_name','')} {s.get('last_name','')}".strip(),
                      "class": (s.get("class_name") or "") + (f" {s.get('section')}" if s.get("section") else ""),
-                     "guardian_name": s.get("guardian_name"), "phone": _norm_phone(s.get("guardian_phone"))})
+                     "guardian_name": s.get("guardian_name"), "phone": _norm_phone(s.get("guardian_phone")),
+                     "has_email": bool((s.get("guardian_email") or "").strip())})
     return {"ready": rows}
 
 
@@ -6050,7 +6080,7 @@ async def resolve_invite_review(payload: dict = Body(...), user: dict = Depends(
     # bypass collision guard by pre-dismissing, run invites, then record resolved
     await db.parent_invite_reviews.update_one({"institution_id": iid, "phone": phone},
                                               {"$set": {"status": "dismissed", "by": user.get("email"), "at": now_iso()}}, upsert=True)
-    res = await _run_parent_invites(iid, students, payload.get("channel") or "whatsapp", user)
+    res = await _run_parent_invites(iid, students, phase58.parse_channels(payload), user)
     await db.parent_invite_reviews.update_one({"institution_id": iid, "phone": phone}, {"$set": {"status": "resolved"}})
     return {"ok": True, "status": "force_linked", "result": res}
 
@@ -6162,9 +6192,7 @@ async def invite_reminder(payload: dict = Body(...), user: dict = Depends(requir
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
     await guard_principal_class(user, cls["name"])
-    channel = payload.get("channel") or "whatsapp"
-    if channel not in COMM_CHANNELS:
-        raise HTTPException(status_code=400, detail="channel must be 'whatsapp' or 'sms'")
+    channels = phase58.parse_channels(payload)
     today = now_iso()[:10]
     if await db.parent_invite_reminders.find_one({"institution_id": iid, "class_id": cls["id"], "date": today}):
         return {"ok": False, "code": "already_sent_today", "sent": 0,
@@ -6175,18 +6203,23 @@ async def invite_reminder(payload: dict = Body(...), user: dict = Depends(requir
             for p in r["invited_parents"]:
                 pending[p["id"]] = p
     school = await db.institutions.find_one({"id": iid}, {"_id": 0, "name": 1})
-    sent = 0
+    sent, results = 0, []
     for p in pending.values():
-        status = await _send_parent_invite(iid, (school or {}).get("name"), p["id"], p.get("name"), p.get("phone"), channel)
+        full = await db.users.find_one({"id": p["id"]}, {"_id": 0, "password_hash": 0}) or p
+        kids = [f"{k.get('first_name','')} {k.get('last_name','')}".strip() for k in
+                await db.students.find({"institution_id": iid, "id": {"$in": full.get("student_ids") or []}}, {"_id": 0, "first_name": 1, "last_name": 1}).to_list(20)]
+        per = await phase58.send_invite_multi(iid, (school or {}).get("name"), full, channels, kids)
+        status = phase58.overall(per)
         sent += status == "sent"
+        results.append({"parent_id": p["id"], "name": p.get("name"), "channels": per})
         await db.parent_invites.insert_one({"id": str(uuid.uuid4()), "institution_id": iid, "student_id": None,
                                             "parent_user_id": p["id"], "phone": p.get("phone"), "status": f"reminder_{status}",
-                                            "channel": channel, "sent_at": now_iso()})
+                                            "channel": ",".join(channels), "channels": per, "sent_at": now_iso()})
     await db.parent_invite_reminders.insert_one({"id": str(uuid.uuid4()), "institution_id": iid, "class_id": cls["id"],
                                                  "class_name": cls["name"], "date": today, "sent": sent,
                                                  "pending_parents": len(pending), "by": user.get("email"), "at": now_iso()})
     await audit(user, "invite_reminder", "parent_invites", cls["id"], f"{sent} reminders · {cls['name']}", iid)
-    return {"ok": True, "sent": sent, "pending_parents": len(pending), "class_name": cls["name"]}
+    return {"ok": True, "sent": sent, "pending_parents": len(pending), "class_name": cls["name"], "results": results}
 
 
 # ---- Public (unauthenticated) parent onboarding ----
@@ -8629,9 +8662,17 @@ async def revoke_principal(pid: str, user: dict = Depends(require_roles("institu
 @api.post("/auth/change-password")
 async def change_password(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     new = payload.get("new_password") or ""
+    if user.get("pw_set_by_staff"):
+        if not _pw_strong(new):
+            raise HTTPException(status_code=400, detail=PW_RULE)
+        if verify_password(new, user.get("password_hash") or ""):
+            raise HTTPException(status_code=400, detail="Choose a new password — not the one the school gave you")
     if len(new) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": hash_password(new), "must_change_password": False}})
+    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": hash_password(new), "must_change_password": False,
+                                                            "password_changed_at": now_iso()}, "$unset": {"pw_set_by_staff": ""}})
+    if user.get("pw_set_by_staff"):
+        await audit(user, "password_changed_after_reset", "users", user["id"], user.get("name"))
     return {"message": "Password updated"}
 
 
@@ -14122,7 +14163,7 @@ async def public_password_reset(token: str, body: ResetBody):
     if not u:
         raise HTTPException(status_code=410, detail="This reset link is no longer valid.")
     await db.users.update_one({"id": u["id"]}, {"$set": {"password_hash": hash_password(body.password), "must_change_password": False,
-                                                         "password_changed_at": now_iso()}, "$inc": {"tv": 1}})
+                                                         "password_changed_at": now_iso()}, "$inc": {"tv": 1}, "$unset": {"pw_set_by_staff": ""}})
     await db.login_attempts.delete_many({"identifier": {"$in": await _account_lock_keys(u)}})
     await db.password_resets.update_many({"user_id": u["id"], "used_at": None, "invalidated_at": None}, {"$set": {"invalidated_at": now_iso()}})
     await audit(u, "password_reset_completed", "users", u["id"], u.get("email"), institution_id=u.get("institution_id"))
@@ -14280,6 +14321,8 @@ async def reset_status(user: dict = Depends(require_roles("platform_admin"))):
     return {"job": await _reset_last_job(),
             "completed": await db.platform_events.find({"type": "reset_completed"}, {"_id": 0}).sort("at", -1).to_list(5)}
 
+
+import phase58  # noqa: E402,F401  (Phase 58 routes register on `api`)
 
 app.include_router(api)
 

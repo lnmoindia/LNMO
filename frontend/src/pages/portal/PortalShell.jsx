@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import api from "../../lib/api";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { Bell, LogOut, Menu, MessageSquareWarning, Moon, Sun, UserCircle2 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
@@ -19,6 +20,15 @@ export default function PortalShell({ brand, label, nav, bottom, base, extra, qu
   const current = nav.find((n) => pathname === `${base}/${n.key}` || pathname.startsWith(`${base}/${n.key}/`)) || nav[0];
   const to = (k) => `${base}/${k}${query}`;
   const signOut = async () => { await logout(); navigate("/login"); };
+  const hasMessages = nav.some((n) => n.key === "messages");
+  const [unread, setUnread] = useState(0);
+  useEffect(() => {
+    if (!hasMessages) return undefined;
+    const load = () => api.get("/chat/unread").then((r) => setUnread(r.data.unread || 0)).catch(() => {});
+    load();
+    const iv = setInterval(load, 30000);
+    return () => clearInterval(iv);
+  }, [hasMessages, pathname]);
   return (
     <div className="min-h-screen bg-[#f6f7f9] dark:bg-[#0B0F17] flex" style={brandVars(brand.color)} data-testid={testid}>
       <aside className="hidden md:flex w-60 flex-col shrink-0 sticky top-0 h-screen bg-white dark:bg-slate-900 border-r border-slate-200/80 dark:border-slate-800" data-testid="portal-sidebar">
@@ -34,6 +44,7 @@ export default function PortalShell({ brand, label, nav, bottom, base, extra, qu
             <NavLink key={n.key} to={to(n.key)} data-testid={`portal-nav-${n.key}`}
               className={({ isActive }) => `flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium transition-colors ${isActive ? "text-[var(--brand-ink)] dark:text-white bg-[var(--brand-soft)]" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800"}`}>
               <n.icon size={16} /> {n.label}
+              {n.key === "messages" && unread > 0 && <span className="ml-auto rounded-full bg-rose-500 text-white text-[10px] font-bold px-1.5" data-testid="portal-nav-messages-badge">{unread}</span>}
             </NavLink>
           ))}
         </nav>
@@ -48,7 +59,10 @@ export default function PortalShell({ brand, label, nav, bottom, base, extra, qu
             <h1 className="font-heading font-bold text-slate-900 dark:text-white truncate leading-tight" data-testid="portal-page-title">{current?.label}</h1>
           </div>
           {extra}
-          <button onClick={() => navigate(to("notices"))} className="h-9 w-9 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" data-testid="portal-bell" aria-label="Notices"><Bell size={17} /></button>
+          <button onClick={() => navigate(to(unread ? "messages" : "notices"))} className="relative h-9 w-9 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" data-testid="portal-bell" aria-label={unread ? `${unread} unread messages` : "Notices"}>
+            <Bell size={17} />
+            {unread > 0 && <span className="absolute -top-0.5 -right-0.5 min-w-[17px] h-[17px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center" data-testid="portal-bell-badge">{unread}</span>}
+          </button>
           <button onClick={toggle} className="h-9 w-9 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" data-testid="portal-theme-toggle" aria-label="Theme">
             {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
           </button>

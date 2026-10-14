@@ -3,12 +3,10 @@ import { Send, Printer, UserCheck, PhoneOff, AlertTriangle, Link2, Loader2, User
 import { toast } from "sonner";
 import api, { errText } from "../../lib/api";
 import { printParentSlip, printParentSlips } from "../../lib/printDoc";
+import { ChannelPicker, ChannelResults } from "../../components/comm/ChannelPicker";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Label } from "../../components/ui/label";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "../../components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "../../components/ui/dialog";
@@ -41,7 +39,8 @@ const BucketRow = ({ bucket, row }) => (
     <div className="min-w-0">
       <p className="font-medium text-slate-800 dark:text-slate-100 truncate">{row.student_name}</p>
       <p className="text-xs text-slate-500">{row.class}{row.phone ? ` · ${row.phone}` : ""}{row.guardian_name ? ` · ${row.guardian_name}` : ""}
-        {row.action === "linked_sibling" ? " · linked to sibling's account" : ""}{row.delivery === "failed" ? " · delivery failed" : ""}</p>
+        {row.action === "linked_sibling" ? " · linked to sibling's account" : ""}{row.delivery === "failed" ? " · delivery failed" : ""}
+        <ChannelResults channels={row.channels} testid={`invite-channels-${row.student_id}`} /></p>
     </div>
     {bucket === "skipped_no_phone" && (
       <Button size="sm" variant="outline" onClick={() => printSlipFor(row.student_id)} data-testid={`print-slip-${row.student_id}`}>
@@ -83,7 +82,7 @@ const Results = ({ result, scope }) => {
 export function InviteParentsDialog({ open, onClose, classes, onDone }) {
   const [all, setAll] = useState(true);
   const [picked, setPicked] = useState([]);
-  const [channel, setChannel] = useState("whatsapp");
+  const [channels, setChannels] = useState(["whatsapp"]);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   useEffect(() => { if (open) { setResult(null); setPicked([]); setAll(true); } }, [open]);
@@ -91,7 +90,7 @@ export function InviteParentsDialog({ open, onClose, classes, onDone }) {
   const run = async () => {
     setBusy(true);
     try {
-      const body = all ? { all: true, channel } : { class_names: picked, channel };
+      const body = all ? { all: true, channels } : { class_names: picked, channels };
       const { data } = await api.post("/students/invite-parents", body);
       setResult(data);
       toast.success(`${data.invited.length} invited`);
@@ -120,19 +119,10 @@ export function InviteParentsDialog({ open, onClose, classes, onDone }) {
                 ))}
               </div>
             )}
-            <div className="flex items-center gap-3">
-              <Label>Channel</Label>
-              <Select value={channel} onValueChange={setChannel}>
-                <SelectTrigger className="w-40" data-testid="invite-channel-select"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="whatsapp">WhatsApp</SelectItem>
-                  <SelectItem value="sms">SMS</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            <ChannelPicker value={channels} onChange={setChannels} prefix="invite" />
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={onClose} data-testid="invite-cancel-btn">Cancel</Button>
-              <Button disabled={busy || (!all && picked.length === 0)} onClick={run} className="bg-indigo-700 hover:bg-indigo-800 text-white" data-testid="invite-run-btn">
+              <Button disabled={busy || channels.length === 0 || (!all && picked.length === 0)} onClick={run} className="bg-indigo-700 hover:bg-indigo-800 text-white" data-testid="invite-run-btn">
                 {busy ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : <Send size={14} className="mr-1.5" />} Send invites
               </Button>
             </div>
@@ -174,6 +164,7 @@ export function ReadyToInvitePanel({ refreshKey }) {
   const [ready, setReady] = useState([]);
   const [review, setReview] = useState([]);
   const [busy, setBusy] = useState("");
+  const [channels, setChannels] = useState(["whatsapp"]);
   const load = useCallback(async () => {
     try {
       const [r, v] = await Promise.all([api.get("/students/ready-to-invite"), api.get("/students/invite-review")]);
@@ -184,15 +175,16 @@ export function ReadyToInvitePanel({ refreshKey }) {
   const inviteOne = async (sid) => {
     setBusy(sid);
     try {
-      const { data } = await api.post(`/students/${sid}/invite-parent`, {});
-      toast.success(data.invited.length ? "Invite sent" : "No invite needed");
+      const { data } = await api.post(`/students/${sid}/invite-parent`, { channels });
+      const per = data.invited[0]?.channels;
+      toast.success(data.invited.length ? `Invite ${data.invited[0].delivery}${per ? ` · ${Object.entries(per).filter(([k]) => !k.startsWith("email_")).map(([k, v]) => `${k}: ${v.replace("skipped_", "")}`).join(", ")}` : ""}` : "No invite needed");
       load();
     } catch (e) { toast.error(errText(e)); } finally { setBusy(""); }
   };
   const inviteAll = async () => {
     setBusy("all");
     for (const r of ready) {
-      try { await api.post(`/students/${r.student_id}/invite-parent`, {}); } catch { /* reported below */ }
+      try { await api.post(`/students/${r.student_id}/invite-parent`, { channels }); } catch { /* reported below */ }
     }
     setBusy(""); toast.success("Invites sent"); load();
   };
@@ -206,13 +198,15 @@ export function ReadyToInvitePanel({ refreshKey }) {
               <Users size={15} /> Ready to invite <span data-testid="ready-to-invite-count">({ready.length})</span>
               <span className="font-normal text-xs text-slate-500">enrolled · guardian phone on file · no parent account yet</span>
             </p>
-            <Button size="sm" disabled={busy === "all"} onClick={inviteAll} className="bg-indigo-700 hover:bg-indigo-800 text-white" data-testid="invite-all-ready-btn">Invite all</Button>
+            <Button size="sm" disabled={busy === "all" || !channels.length} onClick={inviteAll} className="bg-indigo-700 hover:bg-indigo-800 text-white" data-testid="invite-all-ready-btn">Invite all</Button>
           </div>
+          <ChannelPicker value={channels} onChange={setChannels} prefix="ready" />
           <ul className="divide-y divide-indigo-100 dark:divide-indigo-500/20 max-h-48 overflow-y-auto">
             {ready.map((r) => (
               <li key={r.student_id} className="flex items-center justify-between py-1.5 text-sm" data-testid={`ready-row-${r.student_id}`}>
-                <span className="text-slate-800 dark:text-slate-100">{r.student_name} <span className="text-xs text-slate-500">· {r.class} · {r.phone}</span></span>
-                <Button size="sm" variant="outline" disabled={busy === r.student_id} onClick={() => inviteOne(r.student_id)} data-testid={`ready-invite-${r.student_id}`}>
+                <span className="text-slate-800 dark:text-slate-100">{r.student_name} <span className="text-xs text-slate-500">· {r.class} · {r.phone}</span>
+                  {!r.has_email && channels.includes("email") && <span className="ml-1.5 rounded bg-slate-100 dark:bg-slate-800 px-1.5 text-[10px] text-slate-500" data-testid={`ready-no-email-${r.student_id}`}>no email</span>}</span>
+                <Button size="sm" variant="outline" disabled={busy === r.student_id || !channels.length} onClick={() => inviteOne(r.student_id)} data-testid={`ready-invite-${r.student_id}`}>
                   <Send size={12} className="mr-1" /> Invite
                 </Button>
               </li>

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import api, { errText } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { printSlipsFor } from "./ParentInvites";
+import { ChannelPicker } from "../../components/comm/ChannelPicker";
 
 const Seg = ({ value, total, className }) => (
   <div className={`h-full ${className}`} style={{ width: `${total ? (value / total) * 100 : 0}%` }} />
@@ -52,6 +53,7 @@ export function OnboardingProgress({ refreshKey }) {
   const [rows, setRows] = useState([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState("");
+  const [channels, setChannels] = useState(["whatsapp"]);
   const load = useCallback(async () => {
     try { const { data } = await api.get("/students/invite-progress"); setRows(data.classes); } catch { /* advisory */ }
   }, []);
@@ -59,8 +61,10 @@ export function OnboardingProgress({ refreshKey }) {
   const remind = async (row) => {
     setBusy(row.class_id);
     try {
-      const { data } = await api.post("/students/invite-reminder", { class_id: row.class_id });
-      if (data.ok) toast.success(`Reminder sent to ${data.sent} parent${data.sent === 1 ? "" : "s"} in ${row.class_name}`);
+      if (!channels.length) { toast.error("Pick at least one channel"); return; }
+      const { data } = await api.post("/students/invite-reminder", { class_id: row.class_id, channels });
+      const skipped = (data.results || []).filter((r) => Object.values(r.channels).some((v) => String(v).startsWith("skipped"))).length;
+      if (data.ok) toast.success(`Reminder sent to ${data.sent} parent${data.sent === 1 ? "" : "s"} in ${row.class_name}${skipped ? ` · ${skipped} skipped on some channels (no email/phone)` : ""}`);
       else toast.info(data.message);
       load();
     } catch (e) { toast.error(errText(e)); } finally { setBusy(""); }
@@ -76,6 +80,9 @@ export function OnboardingProgress({ refreshKey }) {
         </span>
         <ChevronDown size={16} className={`text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
+      {open && (
+        <div className="px-4 pt-3 border-t border-slate-100 dark:border-slate-800"><ChannelPicker value={channels} onChange={setChannels} prefix="reminder" note="Reminders go to parents who were invited but haven't set up yet, on each channel you pick." /></div>
+      )}
       {open && (
         <ul className="px-4 pb-2 divide-y divide-slate-100 dark:divide-slate-800 border-t border-slate-100 dark:border-slate-800" data-testid="onboarding-progress-list">
           {rows.map((r) => <ClassRow key={r.class_id} row={r} busy={busy} onRemind={remind} />)}

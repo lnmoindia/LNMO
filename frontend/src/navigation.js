@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Building2, CreditCard, ScrollText, GraduationCap,
   Users, UserCog, School, Rows3, BookOpen, Settings, CalendarRange, UserPlus,
-  ClipboardList, CalendarCheck, FileSpreadsheet, Layers, Table2, Megaphone, UserX, CalendarClock, BookMarked, ClipboardCheck, Activity, MessageSquare, Sparkles, ArrowRightLeft, Bug, LifeBuoy, Wallet,
+  ClipboardList, CalendarCheck, FileSpreadsheet, Layers, Table2, Megaphone, UserX, CalendarClock, BookMarked, ClipboardCheck, Activity, MessageSquare, Sparkles, ArrowRightLeft, Bug, LifeBuoy, Wallet, Contact, MessagesSquare,
 } from "lucide-react";
 
 export const platformNav = [
@@ -51,6 +51,8 @@ export const institutionNav = [
       { label: "Students", path: "/app/students", icon: GraduationCap },
       { label: "Teachers", path: "/app/teachers", icon: Users },
       { label: "Users", path: "/app/users", icon: UserCog },
+      { label: "Parents", path: "/app/parents", icon: Contact },
+      { label: "Parent Messages", path: "/app/parent-messages", icon: MessagesSquare },
     ],
   },
   {
@@ -104,6 +106,8 @@ export const teacherNav = [
     items: [
       { label: "My Class", path: "/teacher/my-class", icon: School },
       { label: "My Students", path: "/teacher/students", icon: GraduationCap },
+      { label: "Class Parents", path: "/teacher/parents", icon: Contact },
+      { label: "Parent Chat", path: "/teacher/parent-messages", icon: MessagesSquare },
       { label: "My Timetable", path: "/teacher/timetable", icon: Table2 },
       { label: "My Substitutions", path: "/teacher/substitutions", icon: UserX },
       { label: "Marks Entry", path: "/teacher/marks", icon: FileSpreadsheet },
@@ -133,6 +137,8 @@ export const buildPrincipalNav = () => [
       { label: "Class Hub", path: "/app/class-hub", icon: School },
       { label: "Students", path: "/app/students", icon: GraduationCap },
       { label: "Teachers", path: "/app/teachers", icon: Users },
+      { label: "Parents", path: "/app/parents", icon: Contact },
+      { label: "Parent Messages", path: "/app/parent-messages", icon: MessagesSquare },
       { label: "Subjects", path: "/app/subjects", icon: BookOpen },
       { label: "Promotion", path: "/app/promotion", icon: ArrowRightLeft },
       { label: "Fees", path: "/app/fees", icon: Wallet },

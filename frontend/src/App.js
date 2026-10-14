@@ -36,6 +36,9 @@ import ResetPasswordPage from "./pages/ResetPasswordPage";
 import CommunicationPage from "./pages/institution/CommunicationPage";
 import StudentProfileView from "./pages/institution/StudentProfileView";
 import UsersPage from "./pages/institution/UsersPage";
+import ParentsPage from "./pages/institution/ParentsPage";
+import ParentDetailPage from "./pages/institution/ParentDetailPage";
+import ParentMessagesPage from "./pages/institution/ParentMessagesPage";
 import ChangePasswordPage from "./pages/institution/ChangePasswordPage";
 import ParentSetupPage from "./pages/ParentSetupPage";
 import FeeLinkPage from "./pages/FeeLinkPage";
@@ -168,6 +171,9 @@ function App() {
               <Route path="teachers/:id" element={<AdminOrPrincipal><TeacherProfileView /></AdminOrPrincipal>} />
               <Route path="principals" element={<AdminOnly><PrincipalsPage /></AdminOnly>} />
               <Route path="users" element={<AdminOnly><UsersPage /></AdminOnly>} />
+              <Route path="parents" element={<ParentsPage />} />
+              <Route path="parents/:id" element={<ParentDetailPage />} />
+              <Route path="parent-messages" element={<ParentMessagesPage />} />
               <Route path="classes" element={<Navigate to="/app/class-hub" replace />} />
               <Route path="sections" element={<Navigate to="/app/class-hub" replace />} />
               <Route path="subjects" element={<ResourcePage {...subjectsConfig} headerExtra={({ reload }) => <SubjectImportButton onDone={reload} />} />} />
@@ -212,6 +218,9 @@ function App() {
               <Route path="profile" element={<TeacherProfile />} />
               <Route path="attendance" element={<AttendancePage teacherMode />} />
               <Route path="fee-defaulters" element={<TeacherFeeDefaulters />} />
+              <Route path="parents" element={<ParentsPage />} />
+              <Route path="parents/:id" element={<ParentDetailPage />} />
+              <Route path="parent-messages" element={<ParentMessagesPage />} />
             </Route>
 
             <Route path="*" element={<NotFoundPage />} />

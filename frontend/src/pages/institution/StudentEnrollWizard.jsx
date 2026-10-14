@@ -32,7 +32,7 @@ export default function StudentEnrollWizard({ open, onClose, onDone }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (open) { setStep(0); setForm(emptyForm); setEnroll(true); setPlacement({ academic_year: "", academic_unit_id: "", class_name: "", section: "" }); }
+    if (open) { setStep(0); setForm(emptyForm); setAdmTouched(false); setEnroll(true); setPlacement({ academic_year: "", academic_unit_id: "", class_name: "", section: "" }); }
   }, [open]);
 
   const set = (name, val) => setForm((f) => ({ ...f, [name]: val }));
@@ -42,6 +42,11 @@ export default function StudentEnrollWizard({ open, onClose, onDone }) {
     try { const { data } = await api.get("/students/next-admission-no", { params: { class_name: placement.class_name || "" } }); set("admission_no", data.admission_no); }
     catch (e) { toast.error(errText(e)); } finally { setGenning(false); }
   };
+  const [admTouched, setAdmTouched] = useState(false);
+  // Last step: class is known now, so pre-fill the next number unless the admin typed one.
+  useEffect(() => {
+    if (step === STEPS.length - 1 && !admTouched && enroll && placement.class_name) generateAdmission();
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
   const genEmail = async () => {
     try {
       const nm = `${form.first_name || ""} ${form.last_name || ""}`.trim();
@@ -99,13 +104,6 @@ export default function StudentEnrollWizard({ open, onClose, onDone }) {
             <div className="grid sm:grid-cols-2 gap-4" data-testid="wizard-profile">
               <FieldRow form={form} set={set} name="first_name" label="First name" required />
               <FieldRow form={form} set={set} name="last_name" label="Last name" />
-              <div className="space-y-1.5">
-                <Label>Admission number</Label>
-                <div className="flex gap-2">
-                  <Input value={form.admission_no || ""} onChange={(e) => set("admission_no", e.target.value)} data-testid="student-admission_no" />
-                  <Button type="button" variant="outline" onClick={generateAdmission} disabled={genning} data-testid="generate-admission-btn"><Wand2 size={15} className="mr-1" /> {genning ? "…" : "Generate"}</Button>
-                </div>
-              </div>
               <FieldRow form={form} set={set} name="date_of_birth" label="Date of birth" type="date" />
               <div className="space-y-1.5">
                 <Label>Gender</Label>
@@ -161,8 +159,17 @@ export default function StudentEnrollWizard({ open, onClose, onDone }) {
           )}
           {step === 3 && (
             <div className="space-y-3 text-sm" data-testid="wizard-review">
+              <div className="rounded-lg border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/60 dark:bg-indigo-500/10 p-3 space-y-1.5" data-testid="wizard-admission">
+                <Label>Admission number</Label>
+                <div className="flex gap-2">
+                  <Input value={form.admission_no || ""} onChange={(e) => { setAdmTouched(true); set("admission_no", e.target.value); }} placeholder={genning ? "Generating…" : "e.g. SPS-G8-001"} data-testid="student-admission_no" />
+                  <Button type="button" variant="outline" onClick={() => { setAdmTouched(false); generateAdmission(); }} disabled={genning} data-testid="generate-admission-btn"><Wand2 size={15} className="mr-1" /> {genning ? "…" : "Generate"}</Button>
+                </div>
+                <p className="text-xs text-slate-500" data-testid="admission-hint">
+                  {enroll && placement.class_name ? `Next free number for ${placement.class_name} — edit it if you use your own.` : "Profile only: Generate gives a provisional number (no grade yet), or type your own. Leave blank to auto-assign."}
+                </p>
+              </div>
               <Row label="Name" value={`${form.first_name} ${form.last_name}`.trim() || "—"} />
-              <Row label="Admission No." value={form.admission_no || "—"} />
               <Row label="Guardian" value={form.guardian_name ? `${form.guardian_name}${form.guardian_relation ? ` (${form.guardian_relation})` : ""}` : "—"} />
               <Row label="Status" value={enroll ? <span className="text-emerald-600 font-medium">Enrolled</span> : <span className="text-amber-600 font-medium">Not enrolled</span>} />
               {enroll && <Row label="Placement" value={`${placement.class_name || "—"}${placement.section ? ` · ${placement.section}` : ""}${placement.academic_year ? ` · ${placement.academic_year}` : ""}`} />}

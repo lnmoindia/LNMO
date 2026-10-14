@@ -773,3 +773,13 @@ User-confirmed rules: same-section default (8-A→9-A) with per-student override
 - Files in object storage are not deleted (the storage API has no delete call). Their count is reported as storage_orphans.
 - Tests: tests/test_phase57_reset.py runs the reset only against a throwaway lnmo_reset_test_* database in a subprocess, then drops it. Preview data counts are unchanged. iteration_42 passed.
 
+
+## Phase 58 — Parent profiles, parent chat, staff password reset, invite channels (2026-10-14)
+- Backend module `backend/phase58.py` (imported by server.py before include_router); new collections parent_threads, parent_messages (classified DELETE in data_reset.py).
+- Parents list/detail (/app/parents, /teacher/parents), admin edit w/ audit + both-address email notice, link/unlink child; student detail Parents/Guardians with Message/Call/Email.
+- Parent chat: threads per child, attachments (object storage, 5 MB), seen receipts, unread, 10s polling, close/reopen, hide/report, nudge throttled 1/h (real email or STUB SMS/WA). Staff inbox /app|/teacher/parent-messages; parent portal Messages + bell badge.
+- Staff password reset: /api/users/{uid}/set-password (typed or generated) and /reset-link; force change at next login, tv bump, lockout clear, principal division scope.
+- Invite channel picker (All/WhatsApp/SMS/Email) on bulk, single/ready and reminders; email invites via Resend logged in messages with provider_message_id.
+- Tests: tests/test_phase58.py 5 passed; iteration_43 frontend all flows passed.
+- Backlog: subject-teacher participation in chat, email invites for parents without a phone, websocket push.
+- 2026-10-14 follow-ups: Link-child dialog searches by admission no (exact/partial, ignores case/spaces/dashes) or name, shows class/section + linked parents, marks already-linked (GET /api/parents/{pid}/link-candidates). Enrollment wizard: admission no moved to the last (Review) step, auto-filled once class is known, Generate works without class (provisional -GX-). Admission no uniqueness (case-insensitive, per institution) enforced on wizard, quick add and edit (409). Server-side forced password change: get_current_user returns 403 {detail:{code:"PASSWORD_CHANGE_REQUIRED"}} except change-password/me/logout/platform branding; frontend axios interceptor redirects to /change-password. Tests: tests/test_phase58_fixes.py (3) + phase58 (5) + phase55 login pass.

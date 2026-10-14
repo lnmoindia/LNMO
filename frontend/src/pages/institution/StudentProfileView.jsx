@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import {
   User, GraduationCap, CalendarCheck, Award, Trophy, Phone, Printer, ChevronRight,
-  Users2, Link2Off, BookOpen, History, Crown, Medal, Send,
+  Users2, Link2Off, BookOpen, History, Crown, Medal, Send, Mail, MessageSquare,
 } from "lucide-react";
 import api, { errText } from "../../lib/api";
 import { toast } from "sonner";
 import { Button } from "../../components/ui/button";
 import { printReportCard } from "../../lib/printDoc";
 import { AccountLock } from "../../components/common/AccountLock";
+import { ResetPasswordButton } from "../../components/common/ResetPasswordDialog";
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const fullName = (s) => `${s?.first_name || ""} ${s?.last_name || ""}`.trim() || "—";
@@ -17,6 +18,16 @@ export default function StudentProfileView() {
   const { id } = useParams();
   const [d, setD] = useState(null);
   const [err, setErr] = useState(null);
+  const [guardians, setGuardians] = useState([]);
+  const navigate = useNavigate();
+  useEffect(() => { api.get(`/students/${id}/guardians`).then((r) => setGuardians(r.data.parents)).catch(() => setGuardians([])); }, [id, d]);
+  const messageParent = async (p) => {
+    try {
+      const fd = new FormData(); fd.append("student_id", id); fd.append("parent_id", p.id);
+      const { data } = await api.post("/chat/threads", fd);
+      navigate(`/app/parent-messages?t=${data.thread.id}`);
+    } catch (e) { toast.error(errText(e)); }
+  };
 
   const load = useCallback(() => {
     api.get(`/students/${id}/profile`).then((r) => setD(r.data))
@@ -73,6 +84,7 @@ export default function StudentProfileView() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <AccountLock userId={s.user_id || s.id} />
+          {s.user_id && <ResetPasswordButton userId={s.user_id} name={fullName(s)} hasEmail={Boolean(s.portal_email || s.email)} />}
           <Button variant="outline" onClick={sendReportCard} disabled={sending} data-testid="student-send-report-card"><Send size={15} className="mr-1.5" /> {sending ? "Sending…" : "Send report card"}</Button>
           <Button variant="outline" onClick={printCard} data-testid="student-print-report-card"><Printer size={15} className="mr-1.5" /> Report card</Button>
         </div>
@@ -95,13 +107,22 @@ export default function StudentProfileView() {
           </dl>
         </Panel>
 
-        <Panel icon={Users2} title="Linked parent accounts" testid="student-parents">
-          {d.parents.length ? (
+        <Panel icon={Users2} title="Parents / Guardians" testid="student-parents">
+          {guardians.length ? (
             <ul className="divide-y divide-slate-100 dark:divide-slate-800/60">
-              {d.parents.map((p) => (
-                <li key={p.id} className="px-5 py-3 flex items-center justify-between text-sm">
-                  <span className="text-slate-700 dark:text-slate-200 truncate">{p.name || p.email} <span className="text-slate-400">· {p.email}</span></span>
-                  <button onClick={() => unlinkParent(p.email)} className="inline-flex items-center gap-1 text-red-600 hover:text-red-700 text-xs font-medium" data-testid={`student-unlink-parent-${p.email}`}><Link2Off size={13} /> Unlink</button>
+              {guardians.map((p) => (
+                <li key={p.id} className="px-5 py-3 text-sm space-y-2" data-testid={`student-guardian-${p.id}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <Link to={`/app/parents/${p.id}`} className="font-medium text-indigo-700 dark:text-indigo-400 hover:underline truncate" data-testid={`student-guardian-link-${p.id}`}>
+                      {p.name}{p.relation ? <span className="text-slate-400 font-normal capitalize"> · {p.relation}</span> : null}
+                    </Link>
+                    {(() => { const pe = d.parents.find((x) => x.id === p.id)?.email; return pe ? <button onClick={() => unlinkParent(pe)} className="inline-flex items-center gap-1 text-red-600 hover:text-red-700 text-xs font-medium" data-testid={`student-unlink-parent-${pe}`}><Link2Off size={13} /> Unlink</button> : null; })()}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button size="sm" variant="outline" onClick={() => messageParent(p)} data-testid={`student-guardian-message-${p.id}`}><MessageSquare size={13} className="mr-1" /> Message</Button>
+                    {p.phone && <a href={`tel:+91${p.phone}`} className="inline-flex items-center gap-1 rounded-md border border-slate-200 dark:border-slate-700 px-2.5 h-8 text-xs font-medium" data-testid={`student-guardian-call-${p.id}`}><Phone size={13} /> {p.phone}</a>}
+                    {p.email && <a href={`mailto:${p.email}`} className="inline-flex items-center gap-1 rounded-md border border-slate-200 dark:border-slate-700 px-2.5 h-8 text-xs font-medium" data-testid={`student-guardian-email-${p.id}`}><Mail size={13} /> Email</a>}
+                  </div>
                 </li>
               ))}
             </ul>
