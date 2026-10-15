@@ -83,3 +83,18 @@
 - **IMPORTANT for future `yarn add`**: re-run `touch /app/mobile/node_modules/.deps_complete` afterwards.
 - app.json: removed the empty extra.eas.projectId placeholder (eas init will add the real one). Deduped expo-constants → single 57.0.22 (yarn add expo-constants@~57.0.22 + `npx yarn-deduplicate --packages expo-constants` + yarn install).
 - Verified: tunnel manifest 200 (exposdk:57.0.0, no projectId/updates), Android bundle from manifest 200; expo-doctor 19/20 (remaining = patch-level notices for expo, expo-router, expo-linking, expo-splash-screen, @expo/metro-runtime — left as is); web parent login OK.
+
+## Iteration 10 — Build readiness for Emergent Publish → Mobile → Android
+- **eas.json REMOVED**: no template eas.json ever existed (mobile/ first committed in 180ee87 already with our M3 file; it was created by us via create_file in M3). Emergent manages EAS; no projectId/owner/updates added.
+- **app.json**: name LNMO, slug "mobile" (template, unchanged), version 1.0.0, android.versionCode 1, package/bundleIdentifier com.lnmo.app; adaptiveIcon + new monochromeImage (assets/images/adaptive-monochrome.png, 1024, white mark); permissions CAMERA, READ_MEDIA_IMAGES, POST_NOTIFICATIONS, INTERNET, VIBRATE; blockedPermissions RECORD_AUDIO, READ_MEDIA_VIDEO/AUDIO, WRITE_EXTERNAL_STORAGE, location, READ_CONTACTS, SYSTEM_ALERT_WINDOW; image-picker microphonePermission false + new camera/photo strings (also iOS infoPlist); removed preview-host https intentFilters + iOS associatedDomains (lnmo:// scheme kept); expo-notifications plugin kept; NO googleServicesFile (file not present).
+- **api.ts**: BACKEND normalised (trim, strip trailing "/" and "/api") + warn if unset. No hardcoded URLs anywhere.
+- **Deps**: expo 57.0.29, expo-router ~57.0.27, expo-linking ~57.0.13, expo-splash-screen ~57.0.10, @expo/metro-runtime ~57.0.17. expo-doctor 20/20, expo install --check up to date. Sentinel re-touched.
+- **Proof**: prebuild (temp copy) OK → applicationId com.lnmo.app, versionCode 1, merged perms as intended, monochrome + notification icon + white splash; `expo export --platform android --no-bytecode` OK (hermesc local = x86 vs aarch64 container, irrelevant for cloud build). .gitignore: /android, /ios.
+- PUSH_SETUP.md rewritten for the Emergent Publish flow.
+
+## Iteration 11 — Release builds always use the production backend
+- app.json expo.extra.productionBackendUrl = https://lnmo-fees.emergent.host (no EAS fields, no eas.json).
+- src/lib/api.ts: resolveBackend(__DEV__): dev → EXPO_PUBLIC_BACKEND_URL (preview, from .env, unchanged); release → extra.productionBackendUrl (Constants.expoConfig, with app.json require() fallback inlined in the JS bundle) → env only if missing. Normalised (trailing / and /api). BACKEND_HOST exported. REST (API), absUrl (assets/PDF/branding) and chat WS (chat.ts) all build on BACKEND.
+- About: "Version 1.0.0 (dev)" + "Server: <host>" (testIDs about-version, about-backend-host).
+- Verified: prod export bundle has `l=c(!1)` → production host; web preview parent login uses only the preview host; About shows preview host in dev.
+- LIVE (https://lnmo-fees.emergent.host): /api/ 200 "LNMO API ok", but OLD code — missing /api/push/* (5) and /api/scan/* (5) → user must Redeploy. Production DB has none of sunrise/lpgs/p50demo (branding 404) — separate DB from preview.

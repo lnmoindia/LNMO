@@ -1,9 +1,22 @@
 // API client for the LNMO backend. Same endpoints as the web app (/api/...),
 // but auth is a Bearer token (the web uses an httpOnly cookie). The backend
 // returns tokens in the JSON when the request carries `X-Client: mobile`.
+import Constants from "expo-constants";
 import { storage } from "@/src/utils/storage";
 
-export const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+// Backend origin:
+//  • dev (Expo Go / Metro, __DEV__ true) → EXPO_PUBLIC_BACKEND_URL from mobile/.env (the preview server)
+//  • release build (installed APK)       → app.json extra.productionBackendUrl (the live site);
+//    EXPO_PUBLIC_BACKEND_URL only if that's missing.
+// A trailing "/" or "/api" is stripped. Every REST, asset/PDF (absUrl) and WebSocket URL builds on BACKEND.
+const clean = (u?: string | null) => (u || "").trim().replace(/\/+$/, "").replace(/\/api$/, "");
+const APP_JSON_EXTRA = (require("../../app.json")?.expo?.extra || {}) as { productionBackendUrl?: string };
+const PROD = clean((Constants.expoConfig?.extra as any)?.productionBackendUrl || APP_JSON_EXTRA.productionBackendUrl);
+const DEV_ENV = clean(process.env.EXPO_PUBLIC_BACKEND_URL);
+export const resolveBackend = (dev: boolean) => (dev ? DEV_ENV || PROD : PROD || DEV_ENV);
+export const BACKEND = resolveBackend(__DEV__);
+if (!BACKEND) console.warn("[api] no backend URL configured — API calls will fail");
+export const BACKEND_HOST = BACKEND.replace(/^https?:\/\//, "");
 export const API = `${BACKEND}/api`;
 const ACCESS_KEY = "lnmo.access";
 const REFRESH_KEY = "lnmo.refresh";

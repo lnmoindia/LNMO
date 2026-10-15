@@ -10,46 +10,35 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.lnmo.app",
-      "associatedDomains": [
-        "applinks:lnmo-fees.preview.emergentagent.com"
-      ],
       "infoPlist": {
-        "NSCameraUsageDescription": "Take a photo of your fee payment receipt",
-        "NSPhotoLibraryUsageDescription": "Attach payment screenshots and photos to messages"
+        "NSCameraUsageDescription": "LNMO uses the camera to scan homework and payment receipts",
+        "NSPhotoLibraryUsageDescription": "LNMO lets you choose photos to attach to homework and payments"
       }
     },
     "android": {
+      "package": "com.lnmo.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#FFFFFF"
+        "backgroundColor": "#FFFFFF",
+        "monochromeImage": "./assets/images/adaptive-monochrome.png"
       },
-      "package": "com.lnmo.app",
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.INTERNET",
+        "android.permission.VIBRATE"
       ],
-      "intentFilters": [
-        {
-          "action": "VIEW",
-          "autoVerify": false,
-          "data": [
-            {
-              "scheme": "https",
-              "host": "lnmo-fees.preview.emergentagent.com",
-              "pathPrefix": "/login"
-            },
-            {
-              "scheme": "https",
-              "host": "lnmo-fees.preview.emergentagent.com",
-              "pathPrefix": "/setup/parent"
-            }
-          ],
-          "category": [
-            "BROWSABLE",
-            "DEFAULT"
-          ]
-        }
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.READ_CONTACTS",
+        "android.permission.SYSTEM_ALERT_WINDOW"
       ]
     },
     "web": {
@@ -77,8 +66,9 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Attach payment screenshots and photos to messages",
-          "cameraPermission": "Take a photo of your fee payment receipt"
+          "photosPermission": "LNMO lets you choose photos to attach to homework and payments",
+          "cameraPermission": "LNMO uses the camera to scan homework and payment receipts",
+          "microphonePermission": false
         }
       ],
       [
@@ -92,6 +82,9 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "productionBackendUrl": "https://lnmo-fees.emergent.host"
     }
   }
 }
