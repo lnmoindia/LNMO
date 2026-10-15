@@ -2,6 +2,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/src/lib/api";
 import { setTimezone } from "@/src/lib/format";
+import { cachedGet, sheetName, shrinkSheet } from "@/src/offline/cache";
 
 const base = (cid: string) => `/parent/child/${cid}`;
 const on = (cid: string) => Boolean(cid);
@@ -59,12 +60,14 @@ export const useTutorChats = (subject: string) => useQuery({
 });
 
 // ---------- Teacher (same endpoints as the web teacher pages) ----------
+// Teacher work data that must open offline (rosters, registers, today's timetable): network first, then the per-user offline cache.
 export const useTeacherTT = (tid: string, date?: string) => useQuery({
-  queryKey: ["t-tt", tid, date || ""], queryFn: () => api.get(`/timetable/teacher/${tid}`, date ? { date } : undefined), enabled: Boolean(tid),
+  queryKey: ["t-tt", tid, date || ""], networkMode: "always", enabled: Boolean(tid),
+  queryFn: () => cachedGet(`tt.${tid}.${date || "week"}`, `/timetable/teacher/${tid}`, date ? { date } : undefined),
 });
 export const useMySubs = () => useQuery({ queryKey: ["t-subs"], queryFn: () => api.get("/me/substitutions") });
-export const useTeachingOptions = () => useQuery({ queryKey: ["t-opts"], queryFn: async () => (await api.get("/teacher/teaching-options")).options || [] });
-export const useMyClass = () => useQuery({ queryKey: ["t-myclass"], queryFn: async () => (await api.get("/teacher/my-class")).homerooms || [] });
+export const useTeachingOptions = () => useQuery({ queryKey: ["t-opts"], networkMode: "always", queryFn: async () => (await cachedGet("opts", "/teacher/teaching-options"))?.options || [] });
+export const useMyClass = () => useQuery({ queryKey: ["t-myclass"], networkMode: "always", queryFn: async () => (await cachedGet("myclass", "/teacher/my-class"))?.homerooms || [] });
 export const useSection = (id: string) => useQuery({ queryKey: ["t-section", id], queryFn: () => api.get(`/teacher/my-class/${id}`), enabled: Boolean(id) });
 export const useTeacherWork = () => useQuery({
   queryKey: ["t-work"],
@@ -74,6 +77,7 @@ export const useTeacherWork = () => useQuery({
   },
 });
 export const useAttendanceSheet = (cls: string, sec: string, date: string) => useQuery({
-  queryKey: ["t-att", cls, sec, date], queryFn: () => api.get("/attendance/sheet", { class_name: cls, section: sec, date }), enabled: Boolean(cls && date),
+  queryKey: ["t-att", cls, sec, date], networkMode: "always", enabled: Boolean(cls && date),
+  queryFn: () => cachedGet(sheetName(cls, sec, date), "/attendance/sheet", { class_name: cls, section: sec, date }, shrinkSheet),
 });
 export const useQuickReplies = (enabled: boolean) => useQuery({ queryKey: ["quick-replies"], queryFn: async () => (await api.get("/chat/quick-replies")).replies || [], enabled });

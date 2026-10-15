@@ -21,6 +21,12 @@ export const API = `${BACKEND}/api`;
 const ACCESS_KEY = "lnmo.access";
 const REFRESH_KEY = "lnmo.refresh";
 
+// Dev-only "simulate offline" switch (More → Offline sync): every request fails like a dropped connection.
+export const netSim = { offline: false };
+const SIM_KEY = "lnmo.dev.simOffline";
+export const simReady: Promise<void> = __DEV__ ? storage.getItem(SIM_KEY, false).then((v) => { netSim.offline = Boolean(v); }) : Promise.resolve();
+export async function setNetSim(v: boolean) { netSim.offline = v; await storage.setItem(SIM_KEY, v); }
+
 let access: string | null = null;
 let refresh: string | null = null;
 
@@ -62,7 +68,7 @@ const detailText = (d: any): string => {
 };
 export const errText = (e: any) => (e instanceof ApiError ? e.message : e?.message || "Something went wrong");
 
-type Opts = { body?: any; form?: FormData; params?: Record<string, any>; raw?: boolean };
+type Opts = { body?: any; form?: FormData; params?: Record<string, any>; raw?: boolean; headers?: Record<string, string> };
 
 async function tryRefresh() {
   if (!refresh) return false;
@@ -86,7 +92,7 @@ async function send(method: string, path: string, o: Opts) {
     ? "?" + Object.entries(o.params).filter(([, v]) => v !== undefined && v !== null)
         .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join("&")
     : "";
-  const headers: Record<string, string> = { "X-Client": "mobile", Accept: "application/json", ...authHeaders() };
+  const headers: Record<string, string> = { "X-Client": "mobile", Accept: "application/json", ...authHeaders(), ...(o.headers || {}) };
   let body: any;
   if (o.form) body = o.form;
   else if (o.body !== undefined) { body = JSON.stringify(o.body); headers["Content-Type"] = "application/json"; }
@@ -95,7 +101,9 @@ async function send(method: string, path: string, o: Opts) {
 
 export async function request(method: string, path: string, o: Opts = {}) {
   let res: Response;
+  await simReady;
   try {
+    if (netSim.offline) throw new Error("simulated offline");
     res = await send(method, path, o);
     if (res.status === 401 && !path.startsWith("/auth/") && (await tryRefresh())) res = await send(method, path, o);
   } catch {
@@ -116,7 +124,7 @@ export async function request(method: string, path: string, o: Opts = {}) {
 
 export const api = {
   get: (p: string, params?: Record<string, any>) => request("GET", p, { params }),
-  post: (p: string, body?: any) => request("POST", p, { body: body ?? {} }),
+  post: (p: string, body?: any, headers?: Record<string, string>) => request("POST", p, { body: body ?? {}, headers }),
   put: (p: string, body?: any) => request("PUT", p, { body: body ?? {} }),
   postForm: (p: string, form: FormData) => request("POST", p, { form }),
   del: (p: string) => request("DELETE", p),

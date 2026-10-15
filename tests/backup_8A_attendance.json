@@ -1,0 +1,44 @@
+[
+ {
+  "id": "4c365094-47bf-4449-bef0-fa70960fca52",
+  "institution_id": "e8f49f14-df1b-41e1-ac30-499cdc81522c",
+  "class_name": "Grade 8",
+  "section": "A",
+  "date": "2026-10-14",
+  "entries": {
+   "40151626-0a4d-483e-948f-4c08ebdfe691": "present",
+   "59ad596b-5926-4cac-a184-4dddbf75730d": "present",
+   "6dfc4ba1-a731-487f-913a-b6882b6b3453": "present",
+   "863e3eb6-61f6-4bf5-b1d9-e00c9603a9ad": "present",
+   "8e610db0-76ef-42a2-9086-ceb71d20f361": "present",
+   "c85a7429-c2dc-4ecb-a640-8960a757ec9c": "present",
+   "fefedf12-2ceb-4356-982c-4dd7abae90af": "present"
+  },
+  "finalized": false,
+  "marked_by": "lakshmi@sunrise-demo.in",
+  "created_at": "2026-10-14T15:11:23.834518+00:00",
+  "updated_at": "2026-10-14T16:25:18.836063+00:00",
+  "seed": "mobile_seed_v1"
+ },
+ {
+  "institution_id": "e8f49f14-df1b-41e1-ac30-499cdc81522c",
+  "date": "2026-10-15",
+  "section": "A",
+  "class_name": "Grade 8",
+  "created_at": "2026-10-14T19:01:45.072445+00:00",
+  "entries": {
+   "8e610db0-76ef-42a2-9086-ceb71d20f361": "present",
+   "c85a7429-c2dc-4ecb-a640-8960a757ec9c": "present",
+   "fefedf12-2ceb-4356-982c-4dd7abae90af": "present",
+   "59ad596b-5926-4cac-a184-4dddbf75730d": "present",
+   "668e7310-278e-4fb6-9b9f-7b953851b7a8": "present",
+   "40151626-0a4d-483e-948f-4c08ebdfe691": "present",
+   "6dfc4ba1-a731-487f-913a-b6882b6b3453": "present",
+   "863e3eb6-61f6-4bf5-b1d9-e00c9603a9ad": "present"
+  },
+  "finalized": true,
+  "id": "240331d2-3d5c-4f8d-9e6b-208a3ae0d273",
+  "marked_by": "lakshmi@sunrise-demo.in",
+  "updated_at": "2026-10-14T19:01:46.137699+00:00"
+ }
+]

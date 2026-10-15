@@ -36,7 +36,8 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 ALGO = "HS256"
 
-app = FastAPI(openapi_url="/api/openapi.json", docs_url="/api/docs", redoc_url="/api/redoc")
+app = FastAPI(openapi_url="/api/openapi.json", docs_url="/api/docs", redoc_url="/api/redoc",
+              swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect")
 api = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO)
@@ -8242,12 +8243,28 @@ async def attendance_sheet(class_name: str, section: str = "", date: str = "",
 
 
 @api.post("/attendance/sheet")
-async def save_attendance(payload: dict = Body(...),
+async def save_attendance(request: Request, response: Response, payload: dict = Body(...),
                           user: dict = Depends(require_roles("institution_admin", "teacher"))):
     class_name, section, date = payload.get("class_name"), payload.get("section", ""), payload.get("date")
     if not class_name or not date:
         raise HTTPException(status_code=400, detail="Class and date are required")
     await ensure_class_access(user, class_name, section)
+    # Mobile offline sync: optional Idempotency-Key (per user, 24h) → a retried save returns the first result.
+    idem = (request.headers.get("Idempotency-Key") or "").strip()[:128]
+    idem_q = {"user_id": user["id"], "scope": "attendance_sheet", "key": idem}
+    if idem:
+        prev = await db.idempotency_keys.find_one(idem_q, {"_id": 0})
+        if prev and prev.get("expires_dt") and prev["expires_dt"].replace(tzinfo=timezone.utc) > datetime.now(timezone.utc):
+            response.headers["Idempotent-Replay"] = "true"
+            return prev.get("response")
+    result = await _save_attendance_sheet(user, payload, class_name, section, date)
+    if idem:
+        await db.idempotency_keys.update_one(idem_q, {"$set": {**idem_q, "response": result, "created_at": now_iso(),
+                                                              "expires_dt": datetime.now(timezone.utc) + timedelta(hours=24)}}, upsert=True)
+    return result
+
+
+async def _save_attendance_sheet(user, payload, class_name, section, date):
     entries = {k: v for k, v in (payload.get("entries") or {}).items() if v in ATT_STATUSES}
     key = {"institution_id": user["institution_id"], "class_name": class_name, "section": section, "date": date}
     existing = await db.attendance.find_one(key)
@@ -13975,6 +13992,12 @@ async def _fees_51_setup():
         local = datetime.fromisoformat(p["collected_at"]).astimezone(tzs[p["institution_id"]]).date().isoformat()
         await db.fee_payments.update_one({"id": p["id"], "paid_on": {"$exists": False}},
                                          {"$set": {"paid_on": local, "recorded_at": p["collected_at"], "backdated": False, "paid_on_backfilled": True}})
+
+
+@app.on_event("startup")
+async def _idempotency_indexes():
+    await db.idempotency_keys.create_index([("user_id", 1), ("scope", 1), ("key", 1)], unique=True)
+    await db.idempotency_keys.create_index("expires_dt", expireAfterSeconds=0)
 
 
 @app.on_event("startup")

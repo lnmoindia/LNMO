@@ -14,6 +14,7 @@ import { AuthProvider, useAuth } from "@/src/state/auth";
 import { ChildProvider } from "@/src/state/child";
 import { ToastProvider } from "@/src/state/toast";
 import { PushManager } from "@/src/push/PushManager";
+import { OfflineSync } from "@/src/offline/OfflineSync";
 
 LogBox.ignoreAllLogs(true);
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -47,6 +48,7 @@ export default function RootLayout() {
                 <StatusBar style="dark" />
                 <SessionGuard />
                 <PushManager />
+                <OfflineSync />
                 <Stack screenOptions={{ headerShown: false, animation: "slide_from_right", contentStyle: { backgroundColor: "#F5F6F8" } }}>
                   <Stack.Screen name="index" options={{ animation: "fade" }} />
                   <Stack.Screen name="(parent)" options={{ animation: "fade" }} />

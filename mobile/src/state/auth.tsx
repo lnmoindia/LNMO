@@ -7,6 +7,7 @@ import { queryClient } from "@/src/query-client";
 import { storage } from "@/src/utils/storage";
 import { makeBrand, type Brand } from "./brand";
 import { unregisterPush } from "@/src/push/push";
+import { clearOfflineCache, setCacheOwner } from "@/src/offline/cache";
 
 export type School = { code: string; name: string; logo_url?: string; tagline?: string; background_url?: string };
 type Ctx = {
@@ -23,6 +24,7 @@ type Ctx = {
 };
 const SCHOOL_KEY = "lnmo.school";
 const BRAND_KEY = "lnmo.brand";
+const ME_KEY = "lnmo.me"; // last /auth/me — lets a signed-in teacher open the app offline
 const AuthCtx = createContext<Ctx | null>(null);
 
 // Phone keyboards can add zero-width chars, trailing spaces, or a space after "." in emails.
@@ -39,6 +41,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<any | null>(null);
   const [brandRaw, setBrandRaw] = useState<any>(null);
   const schoolRef = useRef<School | null>(null);
+  const applyUser = useCallback((u: any | null) => {
+    setCacheOwner(u);
+    setUser(u);
+    if (u) storage.setItem(ME_KEY, JSON.stringify(u)); else storage.removeItem(ME_KEY);
+  }, []);
 
   const loadBrand = useCallback(() => {
     api.get("/me/branding").then((b) => { setBrandRaw(b); storage.setItem(BRAND_KEY, JSON.stringify(b || {})); })
@@ -47,9 +54,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshMe = useCallback(async () => {
     const me = await api.get("/auth/me");
-    setUser(me);
+    applyUser(me);
     return me;
-  }, []);
+  }, [applyUser]);
 
   useEffect(() => {
     (async () => {
@@ -61,11 +68,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (tok) {
         try { await refreshMe(); loadBrand(); } catch (e) {
           if (e instanceof ApiError && (e.status === 401 || e.status === 403)) await clearTokens();
+          else if (e instanceof ApiError && e.status === 0) { // offline start: keep the last session
+            const raw = (await storage.getItem(ME_KEY, null)) as string | null;
+            if (raw) { try { applyUser(JSON.parse(raw)); } catch { /* ignore */ } }
+          }
         }
       }
       setReady(true);
     })();
-  }, [refreshMe, loadBrand]);
+  }, [refreshMe, loadBrand, applyUser]);
 
   const resolveSchool = useCallback(async (code: string) => {
     const c = code.trim().toLowerCase();
@@ -89,10 +100,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const acceptSession = useCallback(async (data: any) => {
     await saveTokens(data?.access_token, data?.refresh_token);
     const { access_token, refresh_token, token_type, ...u } = data || {};
-    setUser(u);
+    applyUser(u);
     loadBrand();
     return u;
-  }, [loadBrand]);
+  }, [loadBrand, applyUser]);
 
   const login = useCallback(async (identifier: string, password: string) => {
     const data = await api.post("/auth/login", { email: cleanIdentifier(identifier), password: cleanPassword(password), ...(school?.code ? { slug: school.code } : {}) });
@@ -105,14 +116,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try { await api.post("/auth/logout"); } catch { /* ignore */ }
     closeChat();
     await clearTokens();
+    await clearOfflineCache(); // rosters/registers; the outbox stays hidden per user (never sent for anyone else)
     queryClient.clear();
-    setUser(null);
-  }, []);
+    applyUser(null);
+  }, [applyUser]);
 
   useEffect(() => {
-    authEvents.onUnauthorized = () => { clearTokens(); queryClient.clear(); setUser(null); };
+    authEvents.onUnauthorized = () => { clearTokens(); queryClient.clear(); applyUser(null); }; // outbox kept → syncs after re-login
     authEvents.onPasswordChange = () => setUser((u: any) => (u ? { ...u, must_change_password: true } : u));
-  }, []);
+  }, [applyUser]);
 
   const brand = useMemo(() => makeBrand(brandRaw, school), [brandRaw, school]);
   const value = { ready, school, user, brand, resolveSchool, setSchool, login, acceptSession, logout, refreshMe };

@@ -1,7 +1,7 @@
 // Support / Report an issue → POST /support/issues (same fields as the web dialog).
 import { useState } from "react";
 import { Text, View } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useToast } from "@/src/state/toast";
 import { api } from "@/src/lib/api";
 import { appendFile, type Picked } from "@/src/lib/files";
@@ -14,9 +14,10 @@ const CATS: [string, string][] = [["bug", "Something is broken"], ["question", "
 
 export default function Support() {
   const toast = useToast();
+  const pre = useLocalSearchParams<{ title?: string; desc?: string }>(); // prefilled e.g. from an offline sync rejection
   const [category, setCategory] = useState("question");
-  const [title, setTitle] = useState("");
-  const [desc, setDesc] = useState("");
+  const [title, setTitle] = useState(pre.title || "");
+  const [desc, setDesc] = useState(pre.desc || "");
   const [file, setFile] = useState<Picked | null>(null);
   const [busy, setBusy] = useState(false);
   const submit = async () => {

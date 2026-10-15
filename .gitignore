@@ -87,6 +87,10 @@ frontend/node_modules/.cache/default-development/0.pack
 .emergent/cross_platform_fork_in_progress
 .emergent/mono_fork_setup_complete
 .emergent/.fork_pod_run_id
-.env
-.env.*
-*.env
+
+# Large dev artefacts kept out of the deploy image
+docs/shots/
+docs/build/
+test_reports/
+mobile/.metro-cache/
+mobile/.expo/

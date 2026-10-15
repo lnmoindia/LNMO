@@ -98,3 +98,32 @@
 - About: "Version 1.0.0 (dev)" + "Server: <host>" (testIDs about-version, about-backend-host).
 - Verified: prod export bundle has `l=c(!1)` → production host; web preview parent login uses only the preview host; About shows preview host in dev.
 - LIVE (https://lnmo-fees.emergent.host): /api/ 200 "LNMO API ok", but OLD code — missing /api/push/* (5) and /api/scan/* (5) → user must Redeploy. Production DB has none of sunrise/lpgs/p50demo (branding 404) — separate DB from preview.
+
+## Iteration 12 — Phase M6: Principal app
+- **Commit**: be048ac (base; M6 files currently uncommitted in working tree — auto-commit pending)
+- **Date**: 2026-10-15
+- **Changes**:
+  - Routing: index.tsx → `/principal/today` when `user.role === "teacher" && user.is_principal`. app/principal/_layout.tsx + (tabs)/_layout.tsx (Today, Cover, Attendance, Fees, More).
+  - Today: division attendance, teachers absent, periods needing cover, day-book total, pending proofs/issues, unread parent msgs, exams.
+  - Cover: day picker, mark teacher absent, substitute suggestions, assign/ask/auto-cover/cancel/remove.
+  - Attendance: division-scoped class list → att.tsx register (shared src/ui/AttendanceRegister.tsx, also used by teacher attendance tab).
+  - Fees: Day Book, Defaulters, Proofs (approve/reject), Issues. Counter collection NOT built (note shown: stays on web).
+  - More: messages, students (+student/[id]), teachers (+teacher/[id]), notices (create with scanner), users (ResetSheet unlock/reset), teacher view, profile, notifications, support, about.
+  - src/principal/hooks.ts, src/principal/ResetSheet.tsx.
+  - Lint: removed eslint-disable comments for rule `react-hooks/set-state-in-effect` (not defined in config) in fees.tsx + AttendanceRegister.tsx.
+- **Verified**: lint clean; web preview login sindhu@sunrise-demo.in → all 5 tabs render, scoped to Grade 5 A only.
+- **Files**: mobile/app/index.tsx, mobile/app/principal/**, mobile/src/principal/**, mobile/src/ui/AttendanceRegister.tsx, mobile/app/teacher/(tabs)/attendance.tsx
+
+## Iteration 13 — Principal ⇄ Teacher view switch + offline attendance (Phase M5)
+- **Commit**: be048ac (base; changes uncommitted in working tree — auto-commit pending)
+- **Date**: 2026-10-15
+- **Task 1 (view switch)**: src/state/view.ts (lnmo.view.<uid>, default principal, switchView = dismissAll + replace → first tab), src/ui/ViewSwitch.tsx (ViewSwitch segmented, ViewPill header). Principal More top segmented pill (old "Teacher view" row removed), Principal Today header pill "Teacher view"; Teacher More top row "Switch to Principal view" + Teacher Today header pill — principals only. index.tsx restores the saved view. StackScreen back fallback → homeFor(user).
+- **Task 2 (offline attendance)**: src/offline/{cache,net,outbox,sync,prefetch,OfflineSync,SyncBanner,warn}.ts(x); app/offline/index.tsx (More → Offline sync: status, Sync now, Refresh offline data, Needs attention, Waiting, history 20, dev "Simulate offline" switch) and app/offline/[id].tsx (Resolve sync conflict / Not applied (locked) with diffs, Report to the office → /more/support prefilled, Copy details, Dismiss / Waiting + Discard).
+  - queries.ts: useMyClass/useTeachingOptions/useTeacherTT/useAttendanceSheet → cachedGet (network first, per-user AsyncStorage fallback on status 0) + networkMode "always".
+  - AttendanceRegister: saveRegister() (online → POST as before with Idempotency-Key; offline / network error → outbox), pending marks override server data, "Saved offline — will sync" strip, " · offline" chip suffix.
+  - api.ts: Opts.headers, api.post(p, body, headers), netSim + simReady (dev-only simulated offline). BACKEND resolver untouched.
+  - auth.tsx: applyUser() sets cache owner + stores lnmo.me (offline cold start keeps the session on network error); logout clears lnmo.off.* (outbox kept per user, hidden). Sign-out warning with unsynced count (teacher + principal More).
+  - Screen.tsx: OfflineBanner uses useOnline (NetInfo + sim), SyncBanner on every screen, TabScreen `right` slot, pull-to-refresh also prefetches + syncs.
+  - support.tsx: optional params title/desc.
+- **Backend (additive)**: POST /api/attendance/sheet accepts optional `Idempotency-Key` header (per user, scope attendance_sheet, 24h TTL in new `idempotency_keys` collection; replay returns the stored result + `Idempotent-Replay: true`). Save logic moved verbatim into `_save_attendance_sheet`. Startup index `_idempotency_indexes`.
+- **Verified (web preview)**: lakshmi 8A offline 2 absent → reload → pending → online → synced; conflict (admin Late vs mine Absent) → conflict screen → pick → saved, admin's other change kept; locked (admin finalize) → rejected-locked, no overwrite; real fetch failure (Playwright offline) → outbox → auto-sync via 30s interval; different user (rahul) doesn't see/send lakshmi's outbox, lakshmi re-login syncs it; sindhu switch both ways + remembered; parent/student/teacher/principal logins OK. Android bundle 200. 8A 14+15 Oct restored from /app/tests/backup_8A_attendance.json (exact).

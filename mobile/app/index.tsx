@@ -4,6 +4,7 @@ import { Animated, StyleSheet, View } from "react-native";
 import { Redirect } from "expo-router";
 import { Image } from "expo-image";
 import { useAuth } from "@/src/state/auth";
+import { loadView, viewHome, type AppView } from "@/src/state/view";
 
 let shownOnce = false;
 
@@ -11,6 +12,9 @@ export default function Index() {
   const { ready, school, user } = useAuth();
   const [waited, setWaited] = useState(shownOnce);
   const op = useRef(new Animated.Value(0)).current;
+  const principal = user?.role === "teacher" && Boolean(user?.is_principal);
+  const [view, setView] = useState<{ uid: string; v: AppView } | null>(null);
+  useEffect(() => { if (principal && user?.id) loadView(user.id).then((v) => setView({ uid: user.id, v })); }, [principal, user?.id]);
   useEffect(() => {
     Animated.timing(op, { toValue: 1, duration: 450, useNativeDriver: true }).start();
     if (shownOnce) return undefined;
@@ -18,12 +22,13 @@ export default function Index() {
     return () => clearTimeout(t);
   }, [op]);
 
-  if (ready && waited) {
+  if (ready && waited && !(principal && view?.uid !== user?.id)) {
     if (!school && !user) return <Redirect href="/school" />;
     if (!user) return <Redirect href="/login" />;
     if (user.must_change_password) return <Redirect href="/change-password" />;
     if (user.role === "parent") return <Redirect href="/home" />;
     if (user.role === "student") return <Redirect href="/student/today" />;
+    if (principal && view && view.uid === user.id) return <Redirect href={viewHome(view.v)} />; // last chosen view (default Principal)
     if (user.role === "teacher") return <Redirect href="/teacher/today" />;
     return <Redirect href="/unsupported" />;
   }

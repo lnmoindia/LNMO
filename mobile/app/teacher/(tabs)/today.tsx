@@ -7,6 +7,7 @@ import { useToast } from "@/src/state/toast";
 import { useAttendanceSheet, useMyClass, useMySubs, useTeacherTT, useTeacherWork, useUnread } from "@/src/lib/queries";
 import { api } from "@/src/lib/api";
 import { TabScreen } from "@/src/ui/Screen";
+import { ViewPill } from "@/src/ui/ViewSwitch";
 import { Button, C, Card, Empty, ErrorState, SectionTitle, SkeletonList, k } from "@/src/ui/kit";
 import { DAY_SHORT, fmtDate, fmtTime, hourNow, minutesNow, toMin, todayISO, todayKey } from "@/src/lib/format";
 import { fonts } from "@/src/theme";
@@ -33,7 +34,7 @@ export default function TeacherToday() {
   if (toReview) alerts.push(["review", "inbox", `${toReview} submission${toReview > 1 ? "s" : ""} to review`, "/teacher/homework"]);
   if (home && att.data && !att.data.record && working(tt.data)) alerts.push(["attendance", "check-square", `Attendance not marked yet for ${home.class_name} ${home.name}`, "/teacher/attendance"]);
   return (
-    <TabScreen testID="teacher-today-screen" showSwitcher={false}>
+    <TabScreen testID="teacher-today-screen" showSwitcher={false} right={<ViewPill to="principal" />}>
       <View style={{ gap: 2 }}>
         <Text style={k.h1} testID="teacher-greeting">{greet()}, {(user?.name || "").split(" ")[0]}</Text>
         <Text style={k.small}>{fmtDate(today, { weekday: true })}{home ? ` · Class teacher of ${home.class_name} ${home.name}` : ""}</Text>
