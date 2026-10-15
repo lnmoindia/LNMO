@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import api, { errText } from "../../lib/api";
 import { DataTable, Pagination } from "../../components/common/DataTable";
 import { FormDialog } from "../../components/common/FormDialog";
+import { Avatar } from "../../components/common/Avatar";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { PasswordInput } from "../../components/common/PasswordInput";
@@ -40,7 +41,7 @@ const enrollBadge = (row) => {
 const fullName = (row) => `${row.first_name || ""} ${row.last_name || ""}`.trim() || "—";
 
 const columns = [
-  { key: "name", label: "Name", render: fullName },
+  { key: "name", label: "Name", render: (r) => <span className="flex items-center gap-2"><Avatar src={r.thumb_url} name={fullName(r)} size="xs" testid={`student-avatar-${r.id}`} />{fullName(r)}</span> },
   { key: "admission_no", label: "Admission No." },
   { key: "enrollment_status", label: "Enrollment", render: enrollBadge },
   { key: "class_name", label: "Class" },

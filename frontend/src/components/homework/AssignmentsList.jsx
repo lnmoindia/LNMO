@@ -27,7 +27,7 @@ export default function AssignmentsList({ items, canSubmit = false, onChanged })
 function AsgRow({ a, canSubmit, onChanged }) {
   const b = badge(a);
   const s = a.my_submission;
-  const canAct = canSubmit && a.status === "open" && (!s || s.status === "redo");
+  const canAct = canSubmit && ((!s && a.status === "open") || s?.status === "redo");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
@@ -58,7 +58,12 @@ function AsgRow({ a, canSubmit, onChanged }) {
               <a key={i} href={`${API}/api/assignments/attachment/${a.id}/${i}?kind=assignment`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-fuchsia-600 hover:underline" data-testid={`asg-file-${a.id}-${i}`}><FileText size={12} /> {f.name}</a>
             ))}
           </div>
-          {s?.feedback && <p className="text-xs text-amber-600 mt-1.5" data-testid={`asg-feedback-${a.id}`}>Teacher: {s.feedback}</p>}
+          {s?.status === "redo" ? (
+            <div className="mt-2 rounded-lg border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 px-3 py-2" data-testid={`asg-redo-${a.id}`}>
+              <p className="text-xs font-semibold text-amber-800 dark:text-amber-200">Redo requested: {s.feedback}</p>
+              <p className="text-[11px] text-amber-700/80 dark:text-amber-300/80 mt-0.5">Attempt {s.version || 1} was sent back{s.redo_due_date ? ` · resubmit by ${s.redo_due_date}` : ""} · your earlier attempts are kept</p>
+            </div>
+          ) : s?.feedback && <p className="text-xs text-amber-600 mt-1.5" data-testid={`asg-feedback-${a.id}`}>Teacher: {s.feedback}{s.version > 1 ? ` · attempt ${s.version}` : ""}</p>}
           {s?.attachments?.length > 0 && (
             <div className="flex flex-wrap gap-2 mt-1.5">
               {s.attachments.map((f, i) => (

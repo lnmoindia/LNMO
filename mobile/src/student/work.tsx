@@ -13,8 +13,8 @@ export const isPending = (x: any) => x.status === "open" && (!x.my_submission ||
 export const workBadge = (x: any): [string, string, string] => {
   const s = x.my_submission;
   if (!s) return isPending(x) && dueOf(x) && dueOf(x) < todayISO() ? ["Overdue", C.errorSoft, C.error] : ["Not submitted", C.surfaceTertiary, C.onSurfaceTertiary];
-  if (s.status === "verified" || s.status === "graded") return [s.status === "graded" ? "Graded" : "Verified", C.successSoft, C.success];
-  if (s.status === "redo") return ["Needs redo", C.warningSoft, C.warning];
+  if (s.status === "verified" || s.status === "graded") return [s.score != null ? `Reviewed · ${s.score}${x.max_marks ? `/${x.max_marks}` : ""}` : "Reviewed", C.successSoft, C.success];
+  if (s.status === "redo") return ["Redo requested", C.warningSoft, C.warning];
   return [s.late ? "Submitted · Late" : "Submitted", C.infoSoft, C.info];
 };
 

@@ -6,6 +6,7 @@ import { useChild } from "@/src/state/child";
 import { useAssignments, useExams, useFees, useHomework, useNotices, pendingItems, useSnap, useTimetable } from "@/src/lib/queries";
 import { TabScreen } from "@/src/ui/Screen";
 import { C, Card, Empty, ErrorState, SectionTitle, SkeletonList, k } from "@/src/ui/kit";
+import { ClassTeacherCard } from "@/src/parent/ClassTeacherCard";
 import { Avatar } from "@/src/ui/brandbits";
 import { buildAlerts, TONE } from "@/src/parent/alerts";
 import { PeriodRow, coverFor, todayClasses, ttDay, TodayChanges } from "@/src/parent/timetable";
@@ -40,7 +41,10 @@ export default function Home() {
         <Text style={k.small}>{fmtDate(todayISO(), { weekday: true })}</Text>
       </View>
       {!childId || snap.isLoading ? <SkeletonList n={1} height={110} /> : snap.isError ? <ErrorState error={snap.error} onRetry={snap.refetch} /> : (
-        <ChildHero s={snap.data.student} leader={snap.data.leader_role} />
+        <>
+          <ChildHero s={snap.data.student} leader={snap.data.leader_role} />
+          <ClassTeacherCard t={snap.data.class_teacher} childId={childId} cls={`${snap.data.student.class_name}${snap.data.student.section ? ` ${snap.data.student.section}` : ""}`} testID="home-class-teacher" />
+        </>
       )}
       <View style={{ gap: 10 }} testID="home-today-alerts">
         <SectionTitle title="Today" />
@@ -68,7 +72,7 @@ function ChildHero({ s: st, leader }: { s: any; leader?: string }) {
   return (
     <View style={[s.hero, { backgroundColor: b.color }]} testID="home-child-card">
       <View style={[s.heroBlob, { backgroundColor: b.onColor === "#FFFFFF" ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.3)" }]} />
-      <Avatar name={st.first_name} size={52} light={b.onColor === "#FFFFFF"} />
+      <Avatar name={st.first_name} uri={st.thumb_url || st.photo_url} size={52} light={b.onColor === "#FFFFFF"} testID="home-child-photo" />
       <View style={{ flex: 1 }}>
         <Text style={[s.heroLabel, { color: b.onColor }]}>Your child</Text>
         <Text style={[s.heroName, { color: b.onColor }]} testID="home-child-name">{fullName(st)}</Text>

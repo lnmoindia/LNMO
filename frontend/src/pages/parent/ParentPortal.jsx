@@ -19,6 +19,7 @@ import { TodayList, WeekGrid, NoticesList, ExamsList, ResultsBlock, Field, Chips
 import { pendingItems } from "../portal/PortalKit";
 import { LinkChildDialog } from "./LinkChildDialog";
 import ParentMessages from "./ParentMessages";
+import { Avatar as Photo } from "../../components/common/Avatar";
 
 const API_BASE = process.env.REACT_APP_BACKEND_URL;
 const NAV = [
@@ -82,7 +83,7 @@ export default function ParentPortal() {
       {children?.length === 0 && !["account", "support", "messages"].includes(page) && (
         <PCard testid="parent-no-children"><PEmpty icon={Users} text="No children are linked to your account yet. Link a child from My account, or contact the school office." /></PCard>
       )}
-      {page === "messages" ? (children && <ParentMessages kids={children} />) : (page === "account" || page === "support") ? (
+      {page === "messages" ? (children && <ParentMessages kids={children} childId={selected} />) : (page === "account" || page === "support") ? (
         page === "account"
           ? <Account kids={children || []} onLink={() => setShowLink(true)} onChanged={loadChildren} />
           : <Support />
@@ -96,7 +97,7 @@ function ChildSwitcher({ kids, selected, onPick }) {
   const cur = kids.find((c) => c.id === selected) || kids[0];
   const Avatar = ({ c }) => (
     <span className="h-7 w-7 rounded-full bg-[var(--brand-soft)] text-[var(--brand-ink)] flex items-center justify-center overflow-hidden shrink-0 text-xs font-bold">
-      {c.photo_path ? <img src={`${API_BASE}/api/students/${c.id}/photo`} alt="" className="h-full w-full object-cover" /> : (c.first_name || "?")[0]}
+      {c.thumb_url ? <img src={c.thumb_url} alt="" className="h-full w-full object-cover" /> : c.photo_path ? <img src={`${API_BASE}/api/students/${c.id}/photo`} alt="" className="h-full w-full object-cover" /> : (c.first_name || "?")[0]}
     </span>
   );
   return (
@@ -153,6 +154,7 @@ function ChildPages({ page, childId, go }) {
   if (page === "home") return (
     <>
       <Hero s={s} leader={snap.leader_role} />
+      <ClassTeacher ct={snap.class_teacher} childId={childId} />
       <TodayStrip fees={fees} hw={hw} asg={asg} tt={tt} notices={notices} exams={upcoming} go={go} />
       <div className="grid grid-cols-3 gap-3" data-testid="parent-stats">
         <MiniStat label="Attendance" value={snap.attendance.pct != null ? `${snap.attendance.pct}%` : "—"} sub={snap.attendance.total ? `${snap.attendance.present}/${snap.attendance.total} days` : "No records"} onClick={() => go("attendance")} testid="parent-quick-attendance" />
@@ -192,14 +194,31 @@ function ChildPages({ page, childId, go }) {
         <Field label="Date of birth" value={s.date_of_birth || s.dob} /><Field label="Gender" value={s.gender && s.gender[0].toUpperCase() + s.gender.slice(1)} />
         <Field label="Leadership" value={snap.leader_role === "class_leader" ? "Class Leader" : snap.leader_role === "second_leader" ? "Second Leader" : ""} />
       </div>
+      <div className="px-5 pb-5"><ClassTeacher ct={snap.class_teacher} childId={childId} /></div>
     </PCard>
   );
   return null;
 }
 
+function ClassTeacher({ ct, childId }) {
+  const navigate = useNavigate();
+  return (
+    <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 flex items-center gap-3" data-testid="parent-class-teacher">
+      <Photo src={ct?.thumb_url} name={ct?.name || "?"} size="md" testid="parent-class-teacher-photo" />
+      <div className="flex-1 min-w-0">
+        <p className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">Class teacher</p>
+        <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate" data-testid="parent-class-teacher-name">{ct?.name || "Not assigned yet"}</p>
+      </div>
+      {ct && <Button size="sm" variant="outline" onClick={() => navigate(`/parents/messages?child=${childId}&compose=class_teacher`)} data-testid="parent-class-teacher-message-btn"><MessageSquare size={14} className="mr-1.5" /> Message</Button>}
+    </div>
+  );
+}
+
 const Hero = ({ s, leader }) => (
-  <div className="rounded-2xl p-5 sm:p-6 text-white relative overflow-hidden" style={{ background: "linear-gradient(120deg, var(--brand-ink), var(--brand))" }} data-testid="parent-child-hero">
+  <div className="rounded-2xl p-5 sm:p-6 text-white relative overflow-hidden flex items-center gap-4" style={{ background: "linear-gradient(120deg, var(--brand-ink), var(--brand))" }} data-testid="parent-child-hero">
     <div className="absolute -top-10 -right-10 h-36 w-36 rounded-full bg-white/10" />
+    <Photo src={s.photo_url} name={fullName(s)} size="xl" className="!ring-white/40" testid="parent-child-photo" />
+    <div className="min-w-0 relative">
     <p className="text-xs uppercase tracking-wider text-white/75">Your child</p>
     <h2 className="font-heading text-2xl font-bold flex items-center gap-2 flex-wrap mt-0.5">
       {fullName(s)}
@@ -207,6 +226,7 @@ const Hero = ({ s, leader }) => (
       {leader === "second_leader" && <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-white/90 text-slate-800" data-testid="parent-leader-badge"><Medal size={11} /> Second Leader</span>}
     </h2>
     <p className="text-sm text-white/85 mt-1">{s.admission_no ? `Adm. ${s.admission_no} · ` : ""}{s.class_name}{s.section ? ` · Section ${s.section}` : ""}</p>
+    </div>
   </div>
 );
 

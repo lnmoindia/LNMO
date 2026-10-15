@@ -15,6 +15,7 @@ import { ChildProvider } from "@/src/state/child";
 import { ToastProvider } from "@/src/state/toast";
 import { PushManager } from "@/src/push/PushManager";
 import { OfflineSync } from "@/src/offline/OfflineSync";
+import { UploadProgress } from "@/src/ui/UploadProgress";
 
 LogBox.ignoreAllLogs(true);
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -53,6 +54,7 @@ export default function RootLayout() {
                   <Stack.Screen name="index" options={{ animation: "fade" }} />
                   <Stack.Screen name="(parent)" options={{ animation: "fade" }} />
                 </Stack>
+                <UploadProgress />
               </ToastProvider>
             </ChildProvider>
           </AuthProvider>

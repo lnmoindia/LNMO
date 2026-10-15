@@ -11,8 +11,8 @@ import { useChatSocket } from "../../lib/chatSocket";
 
 const fullName = (c) => `${c?.first_name || ""} ${c?.last_name || ""}`.trim();
 
-function NewMessage({ kids, onSent, onCancel }) {
-  const [child, setChild] = useState(kids[0]?.id || "");
+function NewMessage({ kids, onSent, onCancel, childId }) {
+  const [child, setChild] = useState(childId || kids[0]?.id || "");
   const [target, setTarget] = useState("class_teacher");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -53,12 +53,13 @@ function NewMessage({ kids, onSent, onCancel }) {
   );
 }
 
-export default function ParentMessages({ kids }) {
+export default function ParentMessages({ kids, childId }) {
   const [sp, setSp] = useSearchParams();
   const sel = sp.get("t");
   const [d, setD] = useState(null);
-  const [composing, setComposing] = useState(false);
-  const load = useCallback(() => { api.get("/chat/threads", { params: { status: "" } }).then((r) => setD(r.data)).catch(() => setD({ threads: [] })); }, []);
+  const [composing, setComposing] = useState(!!sp.get("compose"));
+  const load = useCallback(() => { api.get("/chat/threads", { params: { status: "", student_id: childId || "" } }).then((r) => setD(r.data)).catch(() => setD({ threads: [] })); }, [childId]);
+  const kid = kids.find((k) => k.id === childId);
   const live = useChatSocket(useCallback((ev) => { if (ev.type === "unread" || ev.type === "message") load(); }, [load]));
   useEffect(() => { load(); if (live === "live") return undefined; const iv = setInterval(load, 15000); return () => clearInterval(iv); }, [load, live]);
   const open = (id) => { const n = new URLSearchParams(sp); n.set("t", id); setSp(n); };
@@ -72,13 +73,13 @@ export default function ParentMessages({ kids }) {
   );
   return (
     <div className="space-y-4" data-testid="parent-messages">
-      {composing ? <NewMessage kids={kids} onCancel={() => setComposing(false)} onSent={(id) => { setComposing(false); open(id); }} /> : (
+      {composing ? <NewMessage kids={kids} childId={childId} onCancel={() => setComposing(false)} onSent={(id) => { setComposing(false); open(id); }} /> : (
         <div className="flex justify-end">
           <Button onClick={() => setComposing(true)} disabled={!kids.length} className="bg-[var(--brand)] hover:opacity-90 text-white" data-testid="parent-new-message-btn"><Plus size={14} className="mr-1" /> New message</Button>
         </div>
       )}
-      <PCard title="Conversations" icon={MessageSquare} testid="parent-thread-list">
-        {!d ? <div className="h-24 animate-pulse" /> : d.threads.length === 0 ? <PEmpty icon={MessageSquare} text="No messages yet. Write to your child's class teacher or the school office." /> : (
+      <PCard title={kid ? `Conversations · ${kid.first_name}` : "Conversations"} icon={MessageSquare} testid="parent-thread-list">
+        {!d ? <div className="h-24 animate-pulse" /> : d.threads.length === 0 ? <PEmpty icon={MessageSquare} text={kid ? `No messages about ${kid.first_name} yet. Write to the class teacher or the school office.` : "No messages yet. Write to your child's class teacher or the school office."} /> : (
           <ul className="divide-y divide-slate-100 dark:divide-slate-800/60">
             {d.threads.map((t) => (
               <li key={t.id}>

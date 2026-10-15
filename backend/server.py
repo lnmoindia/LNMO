@@ -90,6 +90,7 @@ async def public_user(user: dict) -> dict:
     u = {k: v for k, v in user.items() if k not in ("_id", "password_hash", "signature_path", "signature_type")}
     u["has_photo"] = bool(user.get("photo_path"))
     u["has_signature"] = bool(user.get("signature_path"))
+    u.update(await phase61.user_photo(user["id"]))
     if u.get("institution_id"):
         inst = await db.institutions.find_one({"id": u["institution_id"]}, {"_id": 0, "name": 1})
         u["institution_name"] = inst["name"] if inst else None
@@ -808,6 +809,8 @@ async def list_resource(resource: str, search: str = "", page: int = 1, limit: i
     total = await db[resource].count_documents(query)
     skip = max(page - 1, 0) * limit
     items = await db[resource].find(query, {"_id": 0}).sort("created_at", -1).skip(skip).to_list(limit)
+    if resource == "students":
+        await phase61.add_photos(items, "s")
     return {"items": items, "total": total, "page": page, "pages": max((total + limit - 1) // limit, 1)}
 
 
@@ -1001,6 +1004,7 @@ async def list_users(search: str = "", role: str = "", page: int = 1, limit: int
     total = await db.users.count_documents(query)
     skip = max(page - 1, 0) * limit
     items = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("created_at", -1).skip(skip).to_list(limit)
+    await phase61.add_photos(items, "u")
     return {"items": items, "total": total, "page": page, "pages": max((total + limit - 1) // limit, 1)}
 
 
@@ -1653,6 +1657,7 @@ async def filter_students(class_name: str = "", section: str = "", subject: str 
     total = await db.students.count_documents(query)
     skip = (page - 1) * limit
     rows = await db.students.find(query, {"_id": 0, "password_hash": 0}).sort("first_name", 1).skip(skip).limit(limit).to_list(limit)
+    await phase61.add_photos(rows, "s")
     pages = max(1, (total + limit - 1) // limit)
     return {"items": rows, "total": total, "page": page, "pages": pages}
 
@@ -4180,10 +4185,11 @@ async def parent_child_timetable(student_id: str, user: dict = Depends(require_r
     cfg = await effective_tt_config(iid, ay, cls.get("academic_unit_id"))
     entries = await db.timetable_entries.find(
         {"institution_id": iid, "academic_year": ay, "class_name": st["class_name"], "section": st.get("section"),
-         "status": "active", **PUBLISHED_MATCH}, {"_id": 0, "id": 1, "day": 1, "period_no": 1, "subject": 1,
+         "status": "active", **PUBLISHED_MATCH}, {"_id": 0, "id": 1, "day": 1, "period_no": 1, "subject": 1, "teacher_id": 1,
                                                   "teacher_name": 1, "room": 1, "type": 1, "effective_from": 1, "effective_to": 1}).to_list(500)
-    entries = [e for e in entries if _tt_effective_now(e)]
+    entries = await phase61.decorate_entries([e for e in entries if _tt_effective_now(e)])
     return {"config": cfg, "entries": entries, "academic_year": ay, "class_name": st["class_name"], "section": st.get("section"),
+            **await phase61.class_teachers(iid, st["class_name"], st.get("section")),
             "today_changes": await _section_cover_changes(iid, st["class_name"], st.get("section"))}
 
 
@@ -4767,6 +4773,11 @@ def _put_object(path, data, content_type):
     return r.json()
 
 
+async def _aput(path, data, content_type):
+    """Object-storage upload off the event loop (a slow storage call must never stall other requests/WebSockets)."""
+    return await asyncio.to_thread(_put_object, path, data, content_type)
+
+
 def _get_object(path):
     r = _rq.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": init_storage()}, timeout=60)
     if r.status_code == 404:
@@ -4805,7 +4816,7 @@ async def upload_student_photo(student_id: str, file: UploadFile = File(...),
         raise HTTPException(status_code=400, detail="Image must be under 4 MB")
     path = f"lnmo/photos/{student_id}/{uuid.uuid4()}.{PHOTO_TYPES[file.content_type]}"
     try:
-        result = _put_object(path, data, file.content_type)
+        result = await _aput(path, data, file.content_type)
     except Exception:
         raise HTTPException(status_code=502, detail="Photo storage is unavailable right now — try again shortly")
     await db.students.update_one({"id": student_id}, {"$set": {"photo_path": result["path"], "photo_type": file.content_type}})
@@ -4845,7 +4856,7 @@ async def upload_institution_logo(file: UploadFile = File(...),
         raise HTTPException(status_code=400, detail="Logo must be under 4 MB")
     path = f"lnmo/logos/{iid}/{uuid.uuid4()}.{PHOTO_TYPES[file.content_type]}"
     try:
-        result = _put_object(path, data, file.content_type)
+        result = await _aput(path, data, file.content_type)
     except Exception:
         raise HTTPException(status_code=502, detail="Logo storage is unavailable right now — try again shortly")
     await db.institutions.update_one({"id": iid}, {"$set": {"logo_path": result["path"], "logo_type": file.content_type}})
@@ -5078,8 +5089,8 @@ async def upload_platform_logo(file: UploadFile = File(...), user: dict = Depend
             raise HTTPException(status_code=400, detail="Couldn't process that image — try a PNG with the logo on a plain white background")
     try:
         ext = (file.filename or "logo.png").rsplit(".", 1)[-1].lower()[:5]
-        _put_object(f"lnmo/platform-brand/v{ver}/original.{ext}", data, file.content_type)
-        assets = {n: _put_object(f"lnmo/platform-brand/v{ver}/{n}", b, _brand_media(n))["path"] for n, b in outputs.items()}
+        await _aput(f"lnmo/platform-brand/v{ver}/original.{ext}", data, file.content_type)
+        assets = {n: await _aput(f"lnmo/platform-brand/v{ver}/{n}", b, _brand_media(n))["path"] for n, b in outputs.items()}
     except Exception:
         raise HTTPException(status_code=502, detail="Logo storage is unavailable right now — try again shortly")
     prev = (await _platform_branding()).get("assets") or {}
@@ -5126,7 +5137,7 @@ async def upload_login_background(file: UploadFile = File(...), user: dict = Dep
     jpg = _login_bg_compress(data)
     path = f"lnmo/login-bg/{iid}/{uuid.uuid4()}.jpg"
     try:
-        result = _put_object(path, jpg, "image/jpeg")
+        result = await _aput(path, jpg, "image/jpeg")
     except Exception:
         raise HTTPException(status_code=502, detail="Photo storage is unavailable right now — try again shortly")
     await db.institutions.update_one({"id": iid}, {"$set": {"login_bg_path": result["path"], "login_bg_type": "image/jpeg"},
@@ -5185,9 +5196,9 @@ async def _teacher_in_scope(scope, target: dict) -> bool:
 async def _read_upload(file: UploadFile, max_mb: int):
     if file.content_type not in PHOTO_TYPES:
         raise HTTPException(status_code=400, detail="Please upload a JPG, PNG or WebP image")
-    data = await file.read()
+    data, _ = await phase61.shrink_upload(await file.read(), file.content_type, keep_type=True)
     if len(data) > max_mb * 1024 * 1024:
-        raise HTTPException(status_code=400, detail=f"Image must be under {max_mb} MB")
+        raise HTTPException(status_code=413, detail=f"Image must be under {max_mb} MB")
     return data
 
 
@@ -5199,7 +5210,7 @@ async def upload_profile_photo(file: UploadFile = File(...), user: dict = Depend
     data = await _read_upload(file, 4)
     path = f"lnmo/photos/users/{user['id']}/{uuid.uuid4()}.{PHOTO_TYPES[file.content_type]}"
     try:
-        result = _put_object(path, data, file.content_type)
+        result = await _aput(path, data, file.content_type)
     except Exception:
         raise HTTPException(status_code=502, detail="Photo storage is unavailable right now — try again shortly")
     await db.users.update_one({"id": user["id"]}, {"$set": {"photo_path": result["path"], "photo_type": file.content_type}})
@@ -5244,7 +5255,7 @@ async def upload_signature(file: UploadFile = File(...), user: dict = Depends(re
     data = await _read_upload(file, 2)
     path = f"lnmo/signatures/{user['id']}/{uuid.uuid4()}.{PHOTO_TYPES[file.content_type]}"
     try:
-        result = _put_object(path, data, file.content_type)
+        result = await _aput(path, data, file.content_type)
     except Exception:
         raise HTTPException(status_code=502, detail="Signature storage is unavailable right now — try again shortly")
     await db.users.update_one({"id": user["id"]}, {"$set": {"signature_path": result["path"], "signature_type": file.content_type}})
@@ -5302,7 +5313,7 @@ async def upload_seal(file: UploadFile = File(...), user: dict = Depends(require
     data = await _read_upload(file, 4)
     path = f"lnmo/seals/{iid}/{uuid.uuid4()}.{PHOTO_TYPES[file.content_type]}"
     try:
-        result = _put_object(path, data, file.content_type)
+        result = await _aput(path, data, file.content_type)
     except Exception:
         raise HTTPException(status_code=502, detail="Seal storage is unavailable right now — try again shortly")
     await db.institutions.update_one({"id": iid}, {"$set": {"seal_path": result["path"], "seal_type": file.content_type}})
@@ -6468,7 +6479,8 @@ async def _student_snapshot(iid, student):
             leader_role = "class_leader"
         elif sec.get("second_leader_id") == sid:
             leader_role = "second_leader"
-    return {"student": {k: v for k, v in student.items() if k != "_id"},
+    return {"student": {**{k: v for k, v in student.items() if k != "_id"}, **phase61.photo_urls("s", student)},
+            **await phase61.class_teachers(iid, student.get("class_name"), student.get("section")),
             "attendance": {"present": present, "total": total, "pct": round(present / total * 100) if total else None},
             "attendance_history": history[:30], "results": results,
             "achievements": achievements, "leader_role": leader_role}
@@ -6480,6 +6492,9 @@ async def parent_children(user: dict = Depends(require_roles("parent"))):
     kids = await db.students.find({"institution_id": iid, "id": {"$in": user.get("student_ids") or []}}, {"_id": 0}).to_list(20)
     inst = await db.institutions.find_one({"id": iid}, {"_id": 0, "name": 1, "portal_name": 1, "primary_color": 1, "logo_url": 1, "logo_path": 1, "domain": 1}) or {}
     inst["has_logo"] = bool(inst.pop("logo_path", None))
+    await phase61.add_photos(kids, "s")
+    for k in kids:
+        k["class_teacher"] = (await phase61.class_teachers(iid, k.get("class_name"), k.get("section")))["class_teacher"]
     return {"children": kids, "branding": inst}
 
 
@@ -7094,15 +7109,15 @@ async def _store_hw_files(files, prefix, base="homework"):
     for f in files:
         if f.content_type not in HW_ATTACH_TYPES:
             raise HTTPException(status_code=400, detail="Allowed files: PDF, images (JPG/PNG/WebP) or Word docs")
-        data = await f.read()
+        data, ct = await phase61.shrink_upload(await f.read(), f.content_type)
         if len(data) > HW_MAX_MB * 1024 * 1024:
-            raise HTTPException(status_code=400, detail=f"Each file must be under {HW_MAX_MB} MB")
-        path = f"lnmo/{base}/{prefix}/{uuid.uuid4()}.{HW_ATTACH_TYPES[f.content_type]}"
+            raise HTTPException(status_code=413, detail=f"Each file must be under {HW_MAX_MB} MB")
+        path = f"lnmo/{base}/{prefix}/{uuid.uuid4()}.{HW_ATTACH_TYPES.get(ct, 'bin')}"
         try:
-            res = _put_object(path, data, f.content_type)
+            res = await _aput(path, data, ct)
         except Exception:
             raise HTTPException(status_code=502, detail="File storage is unavailable right now — try again shortly")
-        out.append({"path": res["path"], "name": f.filename, "size": len(data), "type": f.content_type})
+        out.append({"path": res["path"], "name": f.filename, "size": len(data), "type": ct})
     return out
 
 
@@ -7130,17 +7145,19 @@ async def submit_homework(hw_id: str, note: str = Form(""),
     st = await db.students.find_one({"id": sid, "institution_id": iid}, {"_id": 0}) if sid else None
     if not st or st.get("class_name") != hw["class_name"] or st.get("section") != hw["section"]:
         raise HTTPException(status_code=403, detail="This homework isn't for your class")
-    if hw["status"] == "closed":
+    prior = await db.homework_submissions.find_one({"homework_id": hw["id"], "student_id": sid}, {"_id": 0, "status": 1})
+    if hw["status"] == "closed" and not (prior and prior.get("status") == "redo"):
         raise HTTPException(status_code=400, detail="Submissions closed")
     attachments = await _store_hw_files([f for f in (files or []) if f], f"{hw_id}/sub/{sid}")
-    late = now_iso() > hw["due_date"]
     existing = await db.homework_submissions.find_one({"homework_id": hw_id, "student_id": sid}, {"_id": 0})
+    late = now_iso() > ((existing or {}).get("redo_due_date") and existing["redo_due_date"] + "T23:59:59" or hw["due_date"])
     now = now_iso()
     if existing:
-        version = existing.get("version", 1) + 1 if existing["status"] == "redo" else existing.get("version", 1)
+        redo = existing["status"] == "redo"
+        version = existing.get("version", 1) + 1 if redo else existing.get("version", 1)
         await db.homework_submissions.update_one(
             {"id": existing["id"]},
-            {"$set": {"attachments": attachments, "note": note, "submitted_at": now, "late": late,
+            ({"$push": {"attempts": phase61.archive_attempt(existing)}} if redo else {}) | {"$set": {"attachments": attachments, "note": note, "submitted_at": now, "late": late,
                       "status": "submitted", "version": version, "feedback": "", "verified_by": None, "verified_at": None}})
         sub_id = existing["id"]
     else:
@@ -7545,17 +7562,19 @@ async def submit_assignment(asg_id: str, note: str = Form(""),
     st = await db.students.find_one({"id": sid, "institution_id": iid}, {"_id": 0}) if sid else None
     if not st or st.get("class_name") != a["class_name"] or st.get("section") != a["section"]:
         raise HTTPException(status_code=403, detail="This assignment isn't for your class")
-    if a["status"] == "closed":
+    prior = await db.assignment_submissions.find_one({"assignment_id": a["id"], "student_id": sid}, {"_id": 0, "status": 1})
+    if a["status"] == "closed" and not (prior and prior.get("status") == "redo"):
         raise HTTPException(status_code=400, detail="Submissions closed")
     attachments = await _store_hw_files([f for f in (files or []) if f], f"{asg_id}/sub/{sid}", base="assignments")
-    late = now_iso() > a["due_date"]
     existing = await db.assignment_submissions.find_one({"assignment_id": asg_id, "student_id": sid}, {"_id": 0})
+    late = now_iso() > ((existing or {}).get("redo_due_date") and existing["redo_due_date"] + "T23:59:59" or a["due_date"])
     now = now_iso()
     if existing:
-        version = existing.get("version", 1) + 1 if existing["status"] == "redo" else existing.get("version", 1)
+        redo = existing["status"] == "redo"
+        version = existing.get("version", 1) + 1 if redo else existing.get("version", 1)
         await db.assignment_submissions.update_one(
             {"id": existing["id"]},
-            {"$set": {"attachments": attachments, "note": note, "submitted_at": now, "late": late,
+            ({"$push": {"attempts": phase61.archive_attempt(existing)}} if redo else {}) | {"$set": {"attachments": attachments, "note": note, "submitted_at": now, "late": late,
                       "status": "submitted", "version": version, "feedback": "", "score": None,
                       "verified_by": None, "verified_at": None}})
         sub_id = existing["id"]
@@ -8103,6 +8122,7 @@ async def class_detail(class_id: str, user: dict = Depends(require_admin_or_prin
     achievements = await db.achievements.find({"institution_id": iid, "student_id": {"$in": sids}}, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(1000)
     unit = await db.academic_units.find_one({"id": cls.get("academic_unit_id"), "institution_id": iid},
                                             {"_id": 0, "name": 1, "attendance_model": 1, "timetable_required": 1})
+    await phase61.add_photos(students, "s")
     return {"class": cls, "unit": unit, "sections": sections, "offerings": offerings,
             "students": students, "achievements": achievements}
 
@@ -8239,6 +8259,8 @@ async def attendance_sheet(class_name: str, section: str = "", date: str = "",
     students = await db.students.find(q, {"_id": 0}).sort("first_name", 1).to_list(500)
     record = await db.attendance.find_one({"institution_id": user["institution_id"], "class_name": class_name,
                                            "section": section, "date": date}, {"_id": 0})
+    import phase61
+    await phase61.add_photos(students, "s")  # + photo_url / thumb_url (mobile register avatars)
     return {"students": students, "record": record}
 
 
@@ -8438,6 +8460,7 @@ async def teacher_students(class_name: str, section: str = "",
     if section:
         q["section"] = section
     students = await db.students.find(q, {"_id": 0}).sort("first_name", 1).to_list(500)
+    await phase61.add_photos(students, "s")
     return {"students": students}
 
 
@@ -8652,6 +8675,7 @@ async def list_teachers(search: str = "", page: int = 1, limit: int = 20,
     total = await db.users.count_documents(query)
     skip = (page - 1) * limit
     rows = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("name", 1).skip(skip).limit(limit).to_list(limit)
+    await phase61.add_photos(rows, "u")
     for r in rows:
         assigns = await db.teacher_assignments.find(
             {"institution_id": iid, "$or": [{"teacher_id": r["id"]}, {"teacher_email": r["email"]}]}, {"_id": 0}).to_list(200)
@@ -9799,7 +9823,7 @@ async def comm_send_report_card(body: ReportCardSendBody, user: dict = Depends(r
     pdf = _report_card_pdf(rc)
     path = f"lnmo/reportcards/{body.student_id}/{uuid.uuid4()}.pdf"
     try:
-        _put_object(path, pdf, "application/pdf")
+        await _aput(path, pdf, "application/pdf")
     except Exception:
         raise HTTPException(status_code=502, detail="Document storage is unavailable right now — try again shortly")
     link = _secure_link_url(iid, f"reportcard:{body.student_id}", path=path, ct="application/pdf")
@@ -10246,7 +10270,7 @@ async def ai_contribute_item(cid: str, item_type: str = Form(...), chapter: str 
             raise HTTPException(status_code=400, detail=f"Each file must be under {AI_MAX_MB} MB")
         path = f"lnmo/curriculum/{cid}/{uuid.uuid4()}.{AI_FILE_TYPES[file.content_type]}"
         try:
-            _put_object(path, content, file.content_type)
+            await _aput(path, content, file.content_type)
         except Exception:
             raise HTTPException(status_code=502, detail="File storage is unavailable right now — try again shortly")
         data["file_path"] = path
@@ -11140,7 +11164,7 @@ async def platform_library_upload(board: str = Form(LIB_BOARD), grade: str = For
             raise HTTPException(status_code=400, detail=f"File must be under {AI_LIB_MAX_MB} MB")
         path = f"lnmo/library/{lid}/{uuid.uuid4()}.{AI_LIB_FILE_TYPES[file.content_type]}"
         try:
-            _put_object(path, content, file.content_type)
+            await _aput(path, content, file.content_type)
         except Exception:
             raise HTTPException(status_code=502, detail="File storage is unavailable right now — try again shortly")
         doc.update({"file_path": path, "file_name": file.filename, "mime": file.content_type,
@@ -11183,7 +11207,7 @@ async def platform_library_bulk(meta: str = Form(...), board: str = Form(LIB_BOA
         lid = str(uuid.uuid4())
         path = f"lnmo/library/{lid}/{uuid.uuid4()}.{AI_LIB_FILE_TYPES[f.content_type]}"
         try:
-            _put_object(path, content, f.content_type)
+            await _aput(path, content, f.content_type)
         except Exception:
             raise HTTPException(status_code=502, detail="File storage is unavailable right now — try again shortly")
         title = (m.get("title") or "").strip() or (f.filename or "Untitled")
@@ -11827,7 +11851,7 @@ async def create_issue(request: Request, title: str = Form(...), description: st
             raise HTTPException(status_code=400, detail="Screenshot must be under 5 MB")
         path = f"lnmo/support/{user['id']}/{uuid.uuid4()}.{SUPPORT_IMG_TYPES[screenshot.content_type]}"
         try:
-            res = _put_object(path, data, screenshot.content_type)
+            res = await _aput(path, data, screenshot.content_type)
         except Exception:
             raise HTTPException(status_code=502, detail="Screenshot storage is unavailable right now — try again shortly")
         screenshot_path = res["path"]
@@ -13521,15 +13545,16 @@ async def _read_proof_file(file):
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="The file is empty")
+    data, ctype = await phase61.shrink_upload(data, ctype)
     if len(data) > PROOF_MAX:
-        raise HTTPException(status_code=400, detail="Image must be 5 MB or smaller")
+        raise HTTPException(status_code=413, detail="That image is too large — please upload a photo under 20 MB")
     return data, ctype
 
 
-def _store_fee_file(iid, key, data, ctype):
+async def _store_fee_file(iid, key, data, ctype):
     path = f"lnmo/fee-proofs/{iid}/{key}.{PROOF_TYPES[ctype]}"
     try:
-        return _put_object(path, data, ctype)["path"]
+        return (await _aput(path, data, ctype))["path"]
     except Exception:
         raise HTTPException(status_code=502, detail="File storage is unavailable right now — try again shortly")
 
@@ -13580,7 +13605,7 @@ async def submit_fee_proof(inv_id: str, file: UploadFile = File(...), amount: fl
            "student_name": inv.get("student_name"), "class_name": inv.get("class_name"), "section": inv.get("section"),
            "period_label": inv.get("period_label"), "academic_year": inv.get("academic_year"), "amount": amount, "utr": utr or None,
            "paid_on": paid_on, "note": (note or "").strip()[:300] or None,
-           "file_path": _store_fee_file(iid, pid, data, ctype), "file_type": ctype, "file_size": len(data),
+           "file_path": await _store_fee_file(iid, pid, data, ctype), "file_type": ctype, "file_size": len(data),
            "status": "pending", "utr_duplicate": dup, "submitted_by": user["id"], "submitted_by_name": user.get("name"),
            "submitted_at": now_iso()}
     try:
@@ -13717,7 +13742,7 @@ async def _issue_msg(user, by, text, file=None, iid=None, key=None):
     m = {"id": str(uuid.uuid4()), "by": by, "by_name": user.get("name") or user.get("email"), "text": text.strip()[:1000], "at": now_iso()}
     if file is not None and (file.filename or ""):
         data, ctype = await _read_proof_file(file)
-        m.update({"file_path": _store_fee_file(iid, f"issue-{key}-{m['id']}", data, ctype), "file_type": ctype})
+        m.update({"file_path": await _store_fee_file(iid, f"issue-{key}-{m['id']}", data, ctype), "file_type": ctype})
     return m
 
 
@@ -14572,6 +14597,7 @@ import phase59  # noqa: E402,F401  (Phase 59 routes register on `api`)
 import phase60  # noqa: E402,F401  (Phase 60 routes register on `api`)
 import scan as _scan_routes  # noqa: E402,F401  (document scanner routes register on `api`)
 import push as _push_routes  # noqa: E402,F401  (Phase M3 push notification routes + _notify hook)
+import phase61  # noqa: E402,F401  (Phase 61 uploads/diag, photos, submissions review/redo)
 
 app.include_router(api)
 

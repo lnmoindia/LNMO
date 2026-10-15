@@ -10,6 +10,7 @@ import { signOutWarning } from "@/src/offline/warn";
 type Item = [IconName, string, string, string];
 const WORK: Item[] = [
   ["message-circle", "Parent messages", "Inbox and live chat", "/principal/messages"],
+  ["book-open", "Homework & assignments", "Submissions, review and redo", "/principal/work"],
   ["search", "Students", "Search by name or admission no", "/principal/students"],
   ["users", "Teachers", "Contacts and timetables", "/principal/teachers"],
   ["bell", "Notices", "Read and post notices", "/principal/notices"],

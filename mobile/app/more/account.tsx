@@ -7,6 +7,7 @@ import { api } from "@/src/lib/api";
 import { StackScreen } from "@/src/ui/Screen";
 import { Button, Card, Divider, Empty, Field, ListRow, SectionTitle, k } from "@/src/ui/kit";
 import { confirm } from "@/src/ui/brandbits";
+import { MyPhotoCard } from "@/src/ui/MyPhoto";
 import { classLabel, fullName } from "@/src/lib/format";
 
 export default function Account() {
@@ -19,6 +20,7 @@ export default function Account() {
   };
   return (
     <StackScreen title="My account" testID="account-screen">
+      <MyPhotoCard />
       <Card testID="account-details">
         <Field label="Name" value={user?.name} testID="account-name" />
         <Field label="Login email" value={user?.email} testID="account-email" />

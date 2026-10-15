@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
 import { Feather } from "@expo/vector-icons";
-import { useBrand } from "@/src/state/auth";
+import { useAuth, useBrand } from "@/src/state/auth";
 import { useMe, useMyAssignments, useMyExams, useMyHomework, useMyTimetable, useNotices } from "@/src/lib/queries";
 import { TabScreen } from "@/src/ui/Screen";
 import { C, Card, Empty, ErrorState, SectionTitle, SkeletonList, k } from "@/src/ui/kit";
@@ -44,11 +44,12 @@ export default function Today() {
 
 function Hero({ st, leader, att }: any) {
   const b = useBrand();
+  const { user } = useAuth();
   const light = b.onColor === "#FFFFFF";
   return (
     <View style={[s.hero, { backgroundColor: b.color }]} testID="student-hero">
       <View style={[s.blob, { backgroundColor: light ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.3)" }]} />
-      <Avatar name={st.first_name} size={52} light={light} />
+      <Avatar name={st.first_name} uri={st.thumb_url || st.photo_url || user?.thumb_url} size={52} light={light} testID="student-today-photo" />
       <View style={{ flex: 1 }}>
         <Text style={[s.heroLabel, { color: b.onColor }]}>{greet()}</Text>
         <Text style={[s.heroName, { color: b.onColor }]} testID="student-greeting-name">{st.first_name}</Text>

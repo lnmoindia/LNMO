@@ -19,6 +19,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "../../components/ui/alert-dialog";
 import PhoneField from "./PhoneField";
+import { Avatar } from "../../components/common/Avatar";
 
 const STATUS = {
   active: { label: "Active", cls: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400" },
@@ -29,7 +30,7 @@ const STATUS = {
 
 const columns = [
   { key: "name", label: "Name", render: (r) => (
-    <span className="flex items-center gap-1.5">{r.name}{r.is_class_teacher && <ShieldCheck size={13} className="text-indigo-500" title="Class teacher" />}</span>
+    <span className="flex items-center gap-1.5"><Avatar src={r.thumb_url} name={r.name} size="xs" testid={`teacher-avatar-${r.id}`} />{r.name}{r.is_class_teacher && <ShieldCheck size={13} className="text-indigo-500" title="Class teacher" />}</span>
   ) },
   { key: "email", label: "Login email" },
   { key: "employee_id", label: "Emp. ID" },

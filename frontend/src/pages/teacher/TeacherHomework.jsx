@@ -5,6 +5,7 @@ import api, { errText } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Textarea } from "../../components/ui/textarea";
+import SubmissionBoard from "../../components/homework/SubmissionBoard";
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const STATUS_BADGE = {
@@ -60,7 +61,7 @@ export default function TeacherHomework() {
       </div>
 
       {showCreate && <CreateDialog onClose={() => setShowCreate(false)} onDone={() => { setShowCreate(false); load(); }} />}
-      {inbox && <InboxDialog hw={inbox} onClose={() => setInbox(null)} onChange={load} />}
+      {inbox && <SubmissionBoard kind="homework" item={inbox} onClose={() => setInbox(null)} onChange={load} />}
     </div>
   );
 }
@@ -127,80 +128,6 @@ function CreateDialog({ onClose, onDone }) {
       </label>
       <Button className="w-full mt-4" disabled={busy} onClick={submit} data-testid="homework-create-submit">{busy ? <Loader2 className="animate-spin" size={16} /> : "Create homework"}</Button>
     </Modal>
-  );
-}
-
-function InboxDialog({ hw, onClose, onChange }) {
-  const [data, setData] = useState(null);
-  const [openId, setOpenId] = useState(null);
-  const load = useCallback(() => { api.get(`/homework/${hw.id}/submissions`).then((r) => setData(r.data)).catch((e) => toast.error(errText(e))); }, [hw.id]);
-  useEffect(() => { load(); }, [load]);
-
-  return (
-    <Modal title={`Submissions — ${hw.title}`} onClose={onClose} testid="homework-inbox-dialog" wide>
-      {!data && <p className="text-sm text-slate-400">Loading…</p>}
-      {data && (
-        <div className="space-y-3">
-          {data.submissions.length === 0 && <p className="text-sm text-slate-400">No submissions yet.</p>}
-          {data.submissions.map((s) => (
-            <div key={s.id} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3" data-testid={`submission-${s.id}`}>
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="font-medium text-sm text-slate-800 dark:text-slate-200">{s.student_name}
-                    {s.late && <span className="ml-2 text-[10px] font-bold uppercase rounded-full px-1.5 py-0.5 bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300" data-testid={`submission-late-${s.id}`}>Late</span>}
-                    <span className={`ml-2 text-[10px] font-bold uppercase rounded-full px-1.5 py-0.5 ${STATUS_BADGE[s.status]}`}>{s.status}{s.version > 1 ? ` v${s.version}` : ""}</span>
-                  </p>
-                  {s.note && <p className="text-xs text-slate-500 mt-0.5">{s.note}</p>}
-                  <div className="flex flex-wrap gap-2 mt-1.5">
-                    {(s.attachments || []).map((a, i) => (
-                      <a key={i} href={`${API}/api/homework/attachment/${s.id}/${i}?kind=submission`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:underline" data-testid={`submission-file-${s.id}-${i}`}><FileText size={12} /> {a.name}</a>
-                    ))}
-                  </div>
-                  {s.feedback && <p className="text-xs text-amber-600 mt-1">Feedback: {s.feedback}</p>}
-                </div>
-                <div className="flex gap-1.5 shrink-0">
-                  <Button size="sm" variant="outline" onClick={() => setOpenId(openId === s.id ? null : s.id)} data-testid={`review-${s.id}`}>Review</Button>
-                </div>
-              </div>
-              {openId === s.id && (
-                <ReviewPanel sub={s} onClose={() => setOpenId(null)}
-                  onDone={() => { setOpenId(null); load(); onChange?.(); }} />
-              )}
-            </div>
-          ))}
-          {data.pending.length > 0 && <p className="text-xs text-slate-400 pt-2">Pending: {data.pending.map((p) => p.student_name).join(", ")}</p>}
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-function ReviewPanel({ sub, onClose, onDone }) {
-  const [feedback, setFeedback] = useState(sub.feedback || "");
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState("");
-
-  const act = async (verdict) => {
-    if (verdict === "redo" && !feedback.trim()) { setErr("Feedback is required to send work back for redo."); return; }
-    setErr(""); setBusy(verdict);
-    try {
-      await api.post(`/submissions/${sub.id}/verify`, { verdict, feedback: feedback.trim() });
-      toast.success(verdict === "verified" ? "Marked verified" : "Sent back for redo");
-      onDone();
-    } catch (e) { toast.error(errText(e)); setBusy(""); }
-  };
-
-  return (
-    <div className="mt-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 p-3 space-y-2" data-testid={`review-panel-${sub.id}`}>
-      <label className="text-xs font-medium text-slate-500">Feedback {sub.status !== "redo" && <span className="text-slate-400">(optional for verify, required for redo)</span>}</label>
-      <Textarea value={feedback} onChange={(e) => { setFeedback(e.target.value); if (err) setErr(""); }} rows={2} placeholder="Write feedback for the student…" data-testid={`review-feedback-${sub.id}`} />
-      {err && <p className="text-xs text-rose-600" data-testid={`review-error-${sub.id}`}>{err}</p>}
-      <div className="flex gap-2">
-        <Button size="sm" disabled={!!busy} onClick={() => act("verified")} data-testid={`verify-${sub.id}`}><Check size={14} className="mr-1.5" /> {busy === "verified" ? "Saving…" : "Verify"}</Button>
-        <Button size="sm" variant="outline" disabled={!!busy || !feedback.trim()} onClick={() => act("redo")} data-testid={`redo-${sub.id}`}><RotateCcw size={14} className="mr-1.5" /> {busy === "redo" ? "Sending…" : "Send back for redo"}</Button>
-        <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
-      </div>
-    </div>
   );
 }
 

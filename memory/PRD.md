@@ -791,3 +791,11 @@ User-confirmed rules: same-section default (8-A→9-A) with per-student override
 - WebSocket /api/ws/chat (cookie JWT, PASSWORD_CHANGE_REQUIRED → close 4403): message/read/typing/status/unread events to thread participants; client lib/chatSocket.js with backoff + polling fallback (+ ?chatForcePoll=1 / localStorage chatForcePoll=1 QA switch). Works through preview ingress (wss).
 - Tests: tests/test_phase59.py (4) + phase58 suites pass; iteration_44 frontend pass.
 - 2026-10-14: Promotion execute + dues carry-forward now return per-student items (promoted/detained/graduated/transferred, carried ₹/no dues/already carried) + saved runs (promotion_execute, dues_carry_forward); legacy fields kept (summary counts, dues_carry_forward.created/amount/...; new run_summary). PromotionPage shows "View details" toasts. Tests: tests/test_phase59_promotion.py (throwaway school).
+
+## Phase 61 — Uploads hardening, photos, class teacher, chat by child, WS relay, submission review/redo (2026-10-15)
+- Uploads: photos auto-resized (≤2000px JPEG) before storage for chat/fee-proof/homework/assignment files; JSON 413 (>25 MB body, code PAYLOAD_TOO_LARGE) + JSON 500 handler; object-storage puts moved off the event loop (`_aput`); scanner libs guarded (503 JSON if missing), processing in a thread with early downscale to 3000px; GET /api/diag/uploads.
+- Realtime: realtime.Hub now relays every chat event across processes/replicas via Mongo `rt_events` (TTL 120s, ~150ms poll) + per-send timeout.
+- Photos: /api/photos/{me|users/{uid}|students/{sid}} POST/DELETE, 512px + 128px thumbs, signed cookie-free /api/media/photo URLs; photo_url/thumb_url across me, lists, parent children, chat, timetable.
+- Parent: class_teacher + subject_teachers on child summary/timetable/children; chat threads ?student_id= + unread_by_student.
+- Submissions (homework + assignments): submission-board with state chips, detail with previous_attempts, review (optional marks/feedback), redo (feedback required, optional due date), attempts archived on resubmission; notifications + push.
+- Web: SubmissionBoard drawer, student redo state, ClassTeacher card, Messages by child, Avatar component across dashboards/lists.

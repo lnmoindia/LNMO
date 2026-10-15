@@ -6,7 +6,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { Feather } from "@expo/vector-icons";
 import { api } from "@/src/lib/api";
-import { appendFile, downloadToPicked, kb, pickImage, type Picked } from "@/src/lib/files";
+import { appendFile, downloadToPicked, kb, pickImage, prepareImage, type Picked } from "@/src/lib/files";
 import { useBrand } from "@/src/state/auth";
 import { Button, C, Chip, k } from "@/src/ui/kit";
 import { fonts } from "@/src/theme";
@@ -37,7 +37,8 @@ export function DocumentScanner({ open, onClose, onDone, name }: { open: boolean
   const capture = async (src: "camera" | "library") => {
     setErr("");
     try {
-      const f = await pickImage(src, 0.9);
+      const raw = await pickImage(src, 0.9);
+      const f = raw && (await prepareImage(raw, 3000)); // scanner pages: long side ≤ 3000px
       if (!f) return;
       if (f.size && f.size > MAX_SCAN) { setErr("That photo is larger than 15 MB — try again with a smaller photo."); return; }
       const [w, h] = f.width && f.height ? [f.width, f.height] : await sizeOf(f.uri);
@@ -54,7 +55,7 @@ export function DocumentScanner({ open, onClose, onDone, name }: { open: boolean
     setBusy("Straightening and cleaning the page…"); setErr("");
     try {
       const fd = new FormData();
-      await appendFile(fd, "file", q.src);
+      await appendFile(fd, "file", q.src, 3000);
       fd.append("corners", JSON.stringify(q.corners.map(([x, y]) => [Math.round(x), Math.round(y)])));
       fd.append("img_w", String(q.src.width)); fd.append("img_h", String(q.src.height));
       fd.append("mode", q.mode); fd.append("rotation", String(q.rotation));

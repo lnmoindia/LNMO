@@ -5,6 +5,7 @@ import api from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { Skeleton } from "../../components/ui/skeleton";
 import { StatCard } from "../../components/common/StatCard";
+import { Avatar } from "../../components/common/Avatar";
 
 export default function TeacherDashboard() {
   const { user } = useAuth();
@@ -48,7 +49,8 @@ export default function TeacherDashboard() {
         <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-1">
           {user?.institution_name || "Teacher Workspace"}
         </p>
-        <h1 className="font-heading text-2xl md:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
+        <h1 className="font-heading text-2xl md:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-50 flex items-center gap-3">
+          <Avatar src={user?.thumb_url} name={user?.name} size="lg" testid="teacher-dashboard-avatar" />
           Welcome, {user?.name?.split(" ")[0]}
         </h1>
       </div>

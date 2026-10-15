@@ -4,6 +4,8 @@ import { Linking, Text, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/src/lib/api";
+import { Avatar } from "@/src/ui/brandbits";
+import { StudentPhotoButton } from "@/src/ui/MyPhoto";
 import { StackScreen } from "@/src/ui/Screen";
 import { Button, Card, Empty, ErrorState, Field, SectionTitle, SkeletonList, k } from "@/src/ui/kit";
 import { ResetSheet } from "@/src/principal/ResetSheet";
@@ -20,7 +22,10 @@ export default function PStudent() {
     <StackScreen title="Student" testID="principal-student-screen">
       {p.isLoading ? <SkeletonList n={2} /> : p.isError ? <ErrorState error={p.error} onRetry={p.refetch} /> : (
         <Card style={{ gap: 8 }} testID="pstudent-card">
-          <Text style={k.h2} testID="pstudent-name">{fullName(st)}</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+            <Avatar name={st.first_name || "?"} uri={st.photo_url} size={64} testID="pstudent-photo" />
+            <View style={{ flex: 1, gap: 6 }}><Text style={k.h2} testID="pstudent-name">{fullName(st)}</Text>{st.id ? <StudentPhotoButton sid={st.id} onDone={() => p.refetch()} /> : null}</View>
+          </View>
           <Field label="Admission no" value={st.admission_no} /><Field label="Class" value={`${st.class_name || ""} ${st.section || ""}`} />
           <Field label="Date of birth" value={st.date_of_birth ? fmtDate(st.date_of_birth, { year: true }) : "—"} /><Field label="Guardian" value={`${st.guardian_name || "—"} ${st.guardian_phone || ""}`} />
         </Card>

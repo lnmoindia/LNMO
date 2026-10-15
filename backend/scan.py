@@ -9,6 +9,9 @@ GET  /api/scan/files/{id}.pdf download the combined PDF (owner only)
 DELETE /api/scan/files/{id}   delete after it was attached
 Temp docs live in Mongo `scan_temp` with a 24h TTL index (auto cleanup).
 """
+from __future__ import annotations
+
+import asyncio
 import base64
 import io
 import json
@@ -16,8 +19,6 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-import cv2
-import numpy as np
 from bson import Binary
 from fastapi import Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
@@ -27,6 +28,16 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 import server as S
+
+try:  # lazy/guarded: a missing native lib must give a clear JSON error, never take the whole API down
+    import cv2
+    import numpy as np
+    LIB_ERROR = None
+except Exception as _e:  # pragma: no cover
+    cv2 = np = None
+    LIB_ERROR = f"{type(_e).__name__}: {_e}"
+    S.logger.error("scanner libraries unavailable: %s", LIB_ERROR)
+WORK_SIDE = 3000  # decode → downscale to this before warping (keeps every request fast on big phone photos)
 
 MAX_BYTES = 15 * 1024 * 1024
 MAX_SIDE = 2000
@@ -82,11 +93,9 @@ def enhance(img: np.ndarray, mode: str) -> np.ndarray:
     return cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
 
 
-_ROT = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
-
-
 def _rotate(img: np.ndarray, rot: int) -> np.ndarray:
-    return cv2.rotate(img, _ROT[rot]) if rot in _ROT else img
+    rots = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+    return cv2.rotate(img, rots[rot]) if rot in rots else img
 
 
 def _fit(img: np.ndarray, side: int) -> np.ndarray:
@@ -126,6 +135,8 @@ async def _scan_startup():
 async def scan_process(file: UploadFile = File(...), corners: str = Form(""), img_w: float = Form(0), img_h: float = Form(0),
                        mode: str = Form("document"), rotation: int = Form(0), user: dict = Depends(S.get_current_user)):
     _rate(user)
+    if LIB_ERROR:
+        raise HTTPException(status_code=503, detail="The document scanner is unavailable on the server right now — attach the photo directly instead.")
     raw = await file.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES:
         raise HTTPException(status_code=413, detail="That photo is larger than 15 MB — take it again at a lower resolution.")
@@ -133,6 +144,15 @@ async def scan_process(file: UploadFile = File(...), corners: str = Form(""), im
         raise HTTPException(status_code=400, detail="mode must be original, document or grayscale")
     if rotation not in (0, 90, 180, 270):
         raise HTTPException(status_code=400, detail="rotation must be 0, 90, 180 or 270")
+    data, prev, out_w, out_h = await asyncio.to_thread(_process, raw, corners, img_w, img_h, mode, rotation)
+    pid = str(uuid.uuid4())
+    await S.db.scan_temp.insert_one({"id": pid, "kind": "page", "user_id": user["id"], "data": Binary(data), "size": len(data),
+                                     "width": out_w, "height": out_h, "mode": mode, "created_at": _now()})
+    return {"id": pid, "width": out_w, "height": out_h, "size": len(data), "mode": mode, "rotation": rotation,
+            "preview": "data:image/jpeg;base64," + base64.b64encode(prev).decode()}
+
+
+def _process(raw, corners, img_w, img_h, mode, rotation):
     img = _decode(raw)
     h, w = img.shape[:2]
     pts = None
@@ -145,15 +165,13 @@ async def scan_process(file: UploadFile = File(...), corners: str = Form(""), im
         if img_w and img_h and (abs(img_w - w) > 1 or abs(img_h - h) > 1):  # client measured on a different size
             pts = [[x * w / img_w, y * h / img_h] for x, y in pts]
         pts = [[min(max(x, 0), w - 1), min(max(y, 0), h - 1)] for x, y in pts]
+    if max(h, w) > WORK_SIDE:
+        f = WORK_SIDE / max(h, w)
+        img = cv2.resize(img, (int(w * f), int(h * f)), interpolation=cv2.INTER_AREA)
+        pts = [[x * f, y * f] for x, y in pts] if pts else None
     out = warp(img, pts) if pts else img
     out = _rotate(enhance(_fit(out, MAX_SIDE), mode), rotation)
-    data = _jpeg(out, 82)
-    pid = str(uuid.uuid4())
-    await S.db.scan_temp.insert_one({"id": pid, "kind": "page", "user_id": user["id"], "data": Binary(data), "size": len(data),
-                                     "width": out.shape[1], "height": out.shape[0], "mode": mode, "created_at": _now()})
-    prev = _jpeg(_fit(out, 700), 70)
-    return {"id": pid, "width": out.shape[1], "height": out.shape[0], "size": len(data), "mode": mode, "rotation": rotation,
-            "preview": "data:image/jpeg;base64," + base64.b64encode(prev).decode()}
+    return _jpeg(out, 82), _jpeg(_fit(out, 700), 70), out.shape[1], out.shape[0]
 
 
 async def _own(fid: str, kind: str, user: dict):
@@ -197,7 +215,7 @@ async def scan_pdf(payload: dict = Body(...), user: dict = Depends(S.get_current
     if len(ids) > MAX_PAGES:
         raise HTTPException(status_code=400, detail=f"A scan can have at most {MAX_PAGES} pages")
     pages = [await _own(i, "page", user) for i in ids]
-    pdf = build_pdf([bytes(p["data"]) for p in pages])
+    pdf = await asyncio.to_thread(build_pdf, [bytes(p["data"]) for p in pages])
     if len(pdf) > MAX_BYTES:
         raise HTTPException(status_code=413, detail="The PDF is too large — remove a few pages.")
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", str(payload.get("name") or "Scan.pdf")).strip("_")[:80] or "Scan.pdf"

@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Image } from "expo-image";
 import { Feather } from "@expo/vector-icons";
 import { useToast } from "@/src/state/toast";
-import { MAX_BYTES, pickImage, type Picked } from "@/src/lib/files";
+import { pickImage, type Picked } from "@/src/lib/files";
 import { Button, C, k } from "./kit";
 
 export function PhotoPicker({ file, setFile, testID, label = "Payment screenshot" }: { file: Picked | null; setFile: (f: Picked | null) => void; testID: string; label?: string }) {
@@ -12,7 +12,6 @@ export function PhotoPicker({ file, setFile, testID, label = "Payment screenshot
     try {
       const f = await pickImage(src);
       if (!f) return;
-      if (f.size && f.size > MAX_BYTES) return toast("Image must be 5 MB or smaller", "error");
       setFile(f);
     } catch (e: any) { toast(e.message, "error"); }
   };
@@ -30,7 +29,7 @@ export function PhotoPicker({ file, setFile, testID, label = "Payment screenshot
           <Button label="Camera" icon="camera" variant="outline" onPress={() => pick("camera")} style={{ flex: 1 }} testID={`${testID}-camera-btn`} />
         </View>
       )}
-      <Text style={k.small}>JPG, PNG, HEIC or WEBP · max 5 MB</Text>
+      <Text style={k.small}>JPG, PNG, HEIC or WEBP · large photos are resized automatically</Text>
     </View>
   );
 }

@@ -10,7 +10,7 @@ import { useToast } from "@/src/state/toast";
 import { saveRegister } from "@/src/offline/sync";
 import { sameReg, useOutbox } from "@/src/offline/outbox";
 import { Button, C, Card, Chip, Empty, ErrorState, SkeletonList, k } from "@/src/ui/kit";
-import { confirm } from "@/src/ui/brandbits";
+import { Avatar, confirm } from "@/src/ui/brandbits";
 import { addDaysISO, fmtDate, fullName, todayISO } from "@/src/lib/format";
 import { fonts } from "@/src/theme";
 
@@ -87,6 +87,7 @@ export function AttendanceRegister({ classes, initial, onSaved }: { classes: [st
               return (
                 <Pressable key={st.id} disabled={locked} onPress={() => { setMarks((mm) => ({ ...mm, [st.id]: v ? NEXT[v] : "present" })); setDirty(true); }}
                   style={[s.row, i > 0 && s.line]} testID={`att-student-${st.id}`}>
+                  <Avatar name={st.first_name || "?"} uri={st.thumb_url} size={36} />
                   <View style={{ flex: 1 }}><Text style={s.name}>{fullName(st)}</Text><Text style={k.small}>{st.admission_no}</Text></View>
                   <View style={[s.toggle, { backgroundColor: t[0] }]}><Text style={[s.toggleText, { color: t[1] }]} testID={`att-status-${st.id}`}>{t[2]}</Text></View>
                 </Pressable>

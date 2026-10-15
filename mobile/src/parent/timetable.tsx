@@ -4,6 +4,7 @@ import { Feather } from "@expo/vector-icons";
 import { fonts } from "@/src/theme";
 import { C } from "@/src/ui/kit";
 import { useBrand } from "@/src/state/auth";
+import { Avatar } from "@/src/ui/brandbits";
 import { fmtTime, minutesNow, toMin, todayKey } from "@/src/lib/format";
 
 export const ttDay = (tt: any) => tt?.today_changes?.day || todayKey();
@@ -75,7 +76,10 @@ export function PeriodRow({ p, e, cover, now, tag, testID }: { p: any; e: any; c
         {e ? (
           <>
             <Text style={s.subject}>{e.subject}{e.type === "lab" ? " · Lab" : ""}</Text>
-            <Text style={s.teacher}>{e.teacher_name}{e.room ? ` · ${e.room}` : ""}</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              {e.teacher_name ? <Avatar name={e.teacher_name} uri={e.teacher_thumb_url} size={22} /> : null}
+              <Text style={s.teacher}>{e.teacher_name}{e.room ? ` · ${e.room}` : ""}</Text>
+            </View>
             <CoverBadge item={cover} testID={testID ? `${testID}-cover` : undefined} />
           </>
         ) : <Text style={s.free}>Free period</Text>}

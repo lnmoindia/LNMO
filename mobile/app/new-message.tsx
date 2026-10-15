@@ -1,7 +1,7 @@
 // Start a new conversation with the class teacher or the school office (POST /chat/threads).
 import { useState } from "react";
 import { Text, View } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { useChild } from "@/src/state/child";
 import { useToast } from "@/src/state/toast";
@@ -15,8 +15,9 @@ export default function NewMessage() {
   const { children, childId } = useChild();
   const qc = useQueryClient();
   const toast = useToast();
-  const [child, setChild] = useState(childId);
-  const [target, setTarget] = useState<"class_teacher" | "office">("class_teacher");
+  const pre = useLocalSearchParams<{ child?: string; target?: string }>();
+  const [child, setChild] = useState(pre.child || childId);
+  const [target, setTarget] = useState<"class_teacher" | "office">(pre.target === "office" ? "office" : "class_teacher");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const send = async () => {

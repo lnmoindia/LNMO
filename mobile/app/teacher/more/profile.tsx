@@ -1,16 +1,11 @@
 // Teacher profile — mirrors web TeacherProfile (GET /teacher/profile → {user, institution_name, assignments, subjects, total_students, homerooms}).
 // Phone OTP verification, personal email and digital signature stay on the web.
-import { useState } from "react";
 import { Text, View } from "react-native";
-import { Image } from "expo-image";
 import { useQuery } from "@tanstack/react-query";
-import { useAuth } from "@/src/state/auth";
-import { useToast } from "@/src/state/toast";
-import { API, api, authHeaders } from "@/src/lib/api";
-import { appendFile, pickImage } from "@/src/lib/files";
+import { api } from "@/src/lib/api";
+import { MyPhotoCard } from "@/src/ui/MyPhoto";
 import { StackScreen } from "@/src/ui/Screen";
-import { Button, Card, Divider, Empty, ErrorState, SectionTitle, SkeletonList, k } from "@/src/ui/kit";
-import { Avatar } from "@/src/ui/brandbits";
+import { Card, Divider, Empty, ErrorState, SectionTitle, SkeletonList, k } from "@/src/ui/kit";
 import { fmtDate } from "@/src/lib/format";
 
 const Stat = ({ label, value, testID }: { label: string; value: any; testID: string }) => (
@@ -23,32 +18,15 @@ const Row = ({ left, right }: { left: string; right: string }) => (
 );
 
 export default function TeacherProfile() {
-  const { user, refreshMe } = useAuth() as any;
-  const toast = useToast();
   const q = useQuery({ queryKey: ["t-profile"], queryFn: () => api.get("/teacher/profile") });
-  const [has, setHas] = useState<boolean>(Boolean(user?.has_photo));
-  const [v, setV] = useState(Date.now());
-  const [busy, setBusy] = useState(false);
-  const change = async () => {
-    try {
-      const f = await pickImage("library");
-      if (!f) return;
-      if (!/^image\/(png|jpeg|webp)$/.test(f.type)) return toast("Use a JPG, PNG or WEBP photo", "error");
-      setBusy(true);
-      const fd = new FormData(); await appendFile(fd, "file", f);
-      await api.postForm("/profile/photo", fd);
-      setHas(true); setV(Date.now()); toast("Profile photo updated"); refreshMe?.();
-    } catch (e: any) { toast(e.message, "error"); } finally { setBusy(false); }
-  };
   const d = q.data;
   const u = d?.user || {};
   return (
     <StackScreen title="Profile" testID="teacher-profile-screen">
       {q.isLoading ? <SkeletonList n={3} height={120} /> : q.isError ? <ErrorState error={q.error} onRetry={q.refetch} /> : (
         <>
+          <MyPhotoCard />
           <Card style={{ flexDirection: "row", alignItems: "center", gap: 16 }} testID="teacher-profile-card">
-            {has ? <Image source={{ uri: `${API}/users/${user.id}/photo?v=${v}`, headers: authHeaders() }} style={{ width: 72, height: 72, borderRadius: 36 }} testID="teacher-profile-photo" />
-              : <Avatar name={u.name || "T"} size={72} />}
             <View style={{ flex: 1, gap: 3 }}>
               <Text style={k.h2} testID="teacher-profile-name">{u.name}</Text>
               <Text style={k.small}>{u.email}</Text>
@@ -56,7 +34,6 @@ export default function TeacherProfile() {
               {u.phone ? <Text style={k.small}>{u.phone}</Text> : null}
             </View>
           </Card>
-          <Button variant="outline" icon="camera" label={has ? "Change photo" : "Add photo"} onPress={change} loading={busy} testID="teacher-change-photo-btn" />
           <View style={{ flexDirection: "row", gap: 12 }}>
             <Stat label="Assignments" value={d.assignments?.length ?? 0} testID="teacher-stat-assignments" />
             <Stat label="Students" value={d.total_students ?? 0} testID="teacher-stat-students" />

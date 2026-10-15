@@ -18,9 +18,10 @@ export const useAttendance = (cid: string, month: string) =>
 export const useNotices = () => useQuery({ queryKey: ["notices"], queryFn: async () => (await api.get("/notices/feed")).notices || [] });
 export const usePayInfo = (inv: string) => useQuery({ queryKey: ["payinfo", inv], queryFn: () => api.get(`/fees/invoices/${inv}/pay-info`), enabled: Boolean(inv) });
 
-export const useThreads = (poll: boolean) => useQuery({
-  queryKey: ["threads"],
-  queryFn: async () => { const d = await api.get("/chat/threads", { status: "" }); setTimezone(d?.timezone); return d; },
+// Parent: pass the selected child → only that child's threads (+ unread_by_student for the switcher badges).
+export const useThreads = (poll: boolean, studentId?: string) => useQuery({
+  queryKey: ["threads", studentId || ""],
+  queryFn: async () => { const d = await api.get("/chat/threads", { status: "", student_id: studentId || undefined }); setTimezone(d?.timezone); return d; },
   refetchInterval: poll ? 10000 : false,
 });
 export const useThread = (tid: string, poll: boolean) => useQuery({
@@ -28,6 +29,9 @@ export const useThread = (tid: string, poll: boolean) => useQuery({
   queryFn: async () => { const d = await api.get(`/chat/threads/${tid}`); setTimezone(d?.timezone); return d; },
   enabled: Boolean(tid),
   refetchInterval: poll ? 10000 : false,
+});
+export const useUnreadBy = (enabled: boolean) => useQuery({
+  queryKey: ["unread", "by"], queryFn: async () => (await api.get("/chat/unread")) as { unread: number; by_student?: Record<string, number> }, enabled, refetchInterval: 30000,
 });
 export const useUnread = (enabled: boolean) => useQuery({
   queryKey: ["unread"], queryFn: async () => (await api.get("/chat/unread")).unread || 0, enabled, refetchInterval: 30000,
@@ -37,11 +41,13 @@ export const useUnread = (enabled: boolean) => useQuery({
 export const pendingItems = (items: any[] = []) =>
   (items || []).filter((h) => h.status === "open" && (!h.my_submission || h.my_submission.status === "redo"));
 export const filterWork = (items: any[] | undefined, f: string, today: string) => {
-  const sub = (x: any) => Boolean(x.my_submission);
+  // A submission sent back for a redo counts as still due (by the redo due date when the teacher set one).
+  const sub = (x: any) => Boolean(x.my_submission) && x.my_submission.status !== "redo";
+  const due = (x: any) => String(x.my_submission?.redo_due_date || x.due_date || "").slice(0, 10);
   if (!items) return items;
   if (f === "submitted") return items.filter(sub);
-  if (f === "overdue") return items.filter((x) => !sub(x) && x.due_date && String(x.due_date).slice(0, 10) < today);
-  if (f === "due") return items.filter((x) => !sub(x) && (!x.due_date || String(x.due_date).slice(0, 10) >= today) && x.status !== "closed");
+  if (f === "overdue") return items.filter((x) => !sub(x) && due(x) && due(x) < today);
+  if (f === "due") return items.filter((x) => !sub(x) && (!due(x) || due(x) >= today) && (x.status !== "closed" || x.my_submission?.status === "redo"));
   return items;
 };
 

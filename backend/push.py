@@ -44,6 +44,7 @@ TYPE_CATEGORY = {
     "fee_reminder": "fees", "fee_payment_proof": "fees",
     "notice_new": "notices",
     "homework_new": "homework", "assignment_new": "homework",
+    "homework_redo": "homework", "assignment_redo": "homework", "homework_verified": "homework", "assignment_verified": "homework",
     "timetable_change": "timetable",
     "sub_requested": "teacher_covers", "sub_assigned": "teacher_covers", "sub_cancelled": "teacher_covers",
     "absence_approved": "teacher_covers", "absence_rejected": "teacher_covers", "absence_cancelled": "teacher_covers",
@@ -175,7 +176,7 @@ async def _route(user, ntype, related_id, extra):
              "student_id": (inv or iss or {}).get("student_id")}
     elif ntype == "notice_new":
         d = {"route": "/more/notices", "notice_id": rid}
-    elif ntype in ("homework_new", "assignment_new"):
+    elif ntype in ("homework_new", "assignment_new", "homework_redo", "assignment_redo", "homework_verified", "assignment_verified"):
         kind = ntype.split("_")[0]
         if role == "student":
             d = {"route": f"/student/work/{kind}/{rid}"}

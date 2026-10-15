@@ -14,7 +14,7 @@ import { fmtDateTime } from "@/src/lib/format";
 import { fonts } from "@/src/theme";
 
 export default function Messages() {
-  const { children } = useChild();
+  const { children, child, childId } = useChild();
   const qc = useQueryClient();
   const onEv = useCallback((ev: any) => {
     if (ev.type === "unread" || ev.type === "message") {
@@ -23,15 +23,17 @@ export default function Messages() {
     }
   }, [qc]);
   const live = useChatSocket(onEv);
-  const q = useThreads(live !== "live");
+  const q = useThreads(live !== "live", childId);
+  const many = (children?.length || 0) > 1;
   return (
     <TabScreen testID="messages-screen" title="Messages">
+      {many && child && <Text style={k.small} testID="messages-child-filter">Showing messages about {child.first_name} · switch child at the top</Text>}
       <View style={s.top}>
         <LiveBadge status={live} />
         <Button small label="New message" icon="edit" onPress={() => router.push("/new-message")} disabled={!children?.length} testID="messages-new-btn" />
       </View>
       {q.isLoading ? <SkeletonList n={3} height={76} /> : q.isError ? <ErrorState error={q.error} onRetry={q.refetch} /> : !q.data?.threads?.length ? (
-        <Card><Empty icon="message-circle" title="No messages yet" text="Write to your child's class teacher or the school office." /></Card>
+        <Card><Empty icon="message-circle" title={many ? `No messages about ${child?.first_name || "this child"} yet` : "No messages yet"} text="Write to your child's class teacher or the school office." testID="messages-empty" /></Card>
       ) : (
         <Card style={{ padding: 0 }} testID="messages-thread-list">
           {q.data.threads.map((t: any, i: number) => <ThreadRow key={t.id} t={t} last={i === q.data.threads.length - 1} />)}

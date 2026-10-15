@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import api from "../../lib/api";
 import { useChatSocket } from "../../lib/chatSocket";
+import { Avatar } from "../../components/common/Avatar";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { Bell, LogOut, Menu, MessageSquareWarning, Moon, Sun, UserCircle2 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
@@ -72,7 +73,7 @@ export default function PortalShell({ brand, label, nav, bottom, base, extra, qu
           </button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="h-9 w-9 rounded-full flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" data-testid="portal-profile-menu" aria-label="Account"><UserCircle2 size={20} /></button>
+              <button className="h-9 w-9 rounded-full flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" data-testid="portal-profile-menu" aria-label="Account">{user?.photo_url ? <Avatar src={user.thumb_url || user.photo_url} name={user.name} size="sm" testid="portal-user-avatar" /> : <UserCircle2 size={20} />}</button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
               <DropdownMenuLabel className="truncate">{user?.name}</DropdownMenuLabel>

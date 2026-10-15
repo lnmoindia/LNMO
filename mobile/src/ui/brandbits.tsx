@@ -1,5 +1,5 @@
 // Brand bits: school logo (or initials), child avatar, bottom sheet, confirm dialog, "Powered by LNMO".
-import { type ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { Alert, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -7,6 +7,7 @@ import { fonts } from "@/src/theme";
 import { C } from "./kit";
 import { useBrand } from "@/src/state/auth";
 import { initials } from "@/src/lib/format";
+import { absUrl } from "@/src/lib/api";
 
 export function SchoolLogo({ size = 40, uri, name, testID = "school-logo" }: { size?: number; uri?: string; name?: string; testID?: string }) {
   const b = useBrand();
@@ -20,10 +21,16 @@ export function SchoolLogo({ size = 40, uri, name, testID = "school-logo" }: { s
   );
 }
 
-export function Avatar({ name, size = 36, light }: { name: string; size?: number; light?: boolean }) {
+// Photo (signed /api/media/photo URL — no headers needed) or the initial as a fallback.
+export function Avatar({ name, size = 36, light, uri, testID }: { name: string; size?: number; light?: boolean; uri?: string | null; testID?: string }) {
   const b = useBrand();
+  const [bad, setBad] = useState("");
+  const src = uri ? absUrl(uri) : "";
+  if (src && bad !== src) {
+    return <Image source={{ uri: src }} onError={() => setBad(src)} style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: b.soft }} contentFit="cover" testID={testID} accessibilityLabel={name} />;
+  }
   return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: light ? "rgba(255,255,255,0.25)" : b.soft, alignItems: "center", justifyContent: "center" }}>
+    <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: light ? "rgba(255,255,255,0.25)" : b.soft, alignItems: "center", justifyContent: "center" }} testID={testID ? `${testID}-initials` : undefined}>
       <Text style={{ fontFamily: fonts.heading, fontSize: size * 0.42, color: light ? "#fff" : b.ink }}>{(name || "?")[0]?.toUpperCase()}</Text>
     </View>
   );

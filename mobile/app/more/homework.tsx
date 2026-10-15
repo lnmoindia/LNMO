@@ -16,8 +16,8 @@ const FILTERS: [string, string][] = [["due", "Due"], ["submitted", "Submitted"],
 const badge = (hw: any) => {
   const s = hw.my_submission;
   if (!s) return ["Not submitted", C.surfaceTertiary, C.onSurfaceTertiary];
-  if (s.status === "verified") return ["Verified", C.successSoft, C.success];
-  if (s.status === "redo") return ["Needs redo", C.warningSoft, C.warning];
+  if (s.status === "verified" || s.status === "graded") return [s.score != null ? `Reviewed · ${s.score}${hw.max_marks ? `/${hw.max_marks}` : ""}` : "Reviewed", C.successSoft, C.success];
+  if (s.status === "redo") return ["Redo requested", C.warningSoft, C.warning];
   return [s.late ? "Submitted · Late" : "Submitted", C.infoSoft, C.info];
 };
 
@@ -41,7 +41,10 @@ function WorkCard({ hw, kind }: { hw: any; kind: "homework" | "assignment" }) {
         Due {fmtDate(hw.due_date, { weekday: true })}{overdue ? " · overdue" : ""}{hw.status === "closed" ? " · closed" : ""}
       </Text>
       {hw.instructions ? <Text style={k.body}>{hw.instructions}</Text> : null}
-      {hw.my_submission?.feedback ? <Text style={[k.small, { color: C.warning }]}>Teacher: {hw.my_submission.feedback}</Text> : null}
+      {hw.my_submission?.feedback ? <Text style={[k.small, { color: hw.my_submission.status === "redo" ? C.warning : C.onSurfaceSecondary }]} testID={`hw-feedback-${hw.id}`}>
+        {hw.my_submission.status === "redo" ? "Redo requested: " : "Teacher: "}{hw.my_submission.feedback}</Text> : null}
+      {hw.my_submission?.status === "redo" && hw.my_submission.redo_due_date ? <Text style={k.small} testID={`hw-redo-due-${hw.id}`}>Resubmit by {fmtDate(hw.my_submission.redo_due_date, { weekday: true })}</Text> : null}
+      {hw.my_submission?.version > 1 ? <Text style={k.small}>Version {hw.my_submission.version}</Text> : null}
       {(hw.attachments || []).map((a: any, i: number) => (
         <Pressable key={i} onPress={() => open(a, i)} style={st.file} testID={`hw-file-${hw.id}-${i}`}>
           <Feather name="paperclip" size={14} color={b.ink} /><Text style={[st.fileText, { color: b.ink }]} numberOfLines={1}>{a.name}</Text>

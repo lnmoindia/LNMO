@@ -94,3 +94,6 @@ docs/build/
 test_reports/
 mobile/.metro-cache/
 mobile/.expo/
+.env
+.env.*
+*.env

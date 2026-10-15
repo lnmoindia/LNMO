@@ -5,6 +5,7 @@ import api, { errText } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Textarea } from "../../components/ui/textarea";
+import SubmissionBoard from "../../components/homework/SubmissionBoard";
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const STATUS_BADGE = {
@@ -63,7 +64,7 @@ export default function TeacherAssignments() {
       </div>
 
       {showCreate && <CreateDialog onClose={() => setShowCreate(false)} onDone={() => { setShowCreate(false); load(); }} />}
-      {inbox && <InboxDialog asg={inbox} onClose={() => setInbox(null)} onChange={load} />}
+      {inbox && <SubmissionBoard kind="assignments" item={inbox} onClose={() => setInbox(null)} onChange={load} />}
     </div>
   );
 }
@@ -126,93 +127,6 @@ function CreateDialog({ onClose, onDone }) {
       {files.length > 0 && <p className="text-xs text-slate-500">{files.length} file(s) selected</p>}
       <Button className="w-full mt-4" disabled={busy} onClick={submit} data-testid="assignment-create-submit">{busy ? <Loader2 className="animate-spin" size={16} /> : "Create assignment"}</Button>
     </Modal>
-  );
-}
-
-function InboxDialog({ asg, onClose, onChange }) {
-  const [data, setData] = useState(null);
-  const [openId, setOpenId] = useState(null);
-  const load = useCallback(() => { api.get(`/assignments/${asg.id}/submissions`).then((r) => setData(r.data)).catch((e) => toast.error(errText(e))); }, [asg.id]);
-  useEffect(() => { load(); }, [load]);
-
-  return (
-    <Modal title={`Submissions — ${asg.title} (max ${asg.max_marks})`} onClose={onClose} testid="assignment-inbox-dialog" wide>
-      {!data && <p className="text-sm text-slate-400">Loading…</p>}
-      {data && (
-        <div className="space-y-3">
-          {data.submissions.length === 0 && <p className="text-sm text-slate-400">No submissions yet.</p>}
-          {data.submissions.map((s) => (
-            <div key={s.id} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3" data-testid={`asg-submission-${s.id}`}>
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="font-medium text-sm text-slate-800 dark:text-slate-200">{s.student_name}
-                    {s.late && <span className="ml-2 text-[10px] font-bold uppercase rounded-full px-1.5 py-0.5 bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300">Late</span>}
-                    <span className={`ml-2 text-[10px] font-bold uppercase rounded-full px-1.5 py-0.5 ${STATUS_BADGE[s.status]}`}>{s.status}{s.version > 1 ? ` v${s.version}` : ""}</span>
-                    {s.status === "verified" && s.score != null && <span className="ml-2 text-xs font-bold text-emerald-600" data-testid={`asg-score-${s.id}`}>{s.score}/{asg.max_marks}</span>}
-                  </p>
-                  {s.note && <p className="text-xs text-slate-500 mt-0.5">{s.note}</p>}
-                  <div className="flex flex-wrap gap-2 mt-1.5">
-                    {(s.attachments || []).map((a, i) => (
-                      <a key={i} href={`${API}/api/assignments/attachment/${s.id}/${i}?kind=submission`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-fuchsia-600 hover:underline"><FileText size={12} /> {a.name}</a>
-                    ))}
-                  </div>
-                  {s.feedback && <p className="text-xs text-amber-600 mt-1">Feedback: {s.feedback}</p>}
-                </div>
-                <div className="flex gap-1.5 shrink-0">
-                  <Button size="sm" variant="outline" onClick={() => setOpenId(openId === s.id ? null : s.id)} data-testid={`asg-review-btn-${s.id}`}>Review &amp; score</Button>
-                </div>
-              </div>
-              {openId === s.id && (
-                <ReviewPanel sub={s} maxMarks={asg.max_marks} onClose={() => setOpenId(null)}
-                  onDone={() => { setOpenId(null); load(); onChange?.(); }} />
-              )}
-            </div>
-          ))}
-          {data.pending.length > 0 && <p className="text-xs text-slate-400 pt-2">Pending: {data.pending.map((p) => p.student_name).join(", ")}</p>}
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-function ReviewPanel({ sub, maxMarks, onClose, onDone }) {
-  const [score, setScore] = useState(sub.score != null ? String(sub.score) : "");
-  const [feedback, setFeedback] = useState(sub.feedback || "");
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState("");
-
-  const verify = async () => {
-    const n = parseInt(score, 10);
-    if (score.trim() === "" || Number.isNaN(n) || n < 0 || n > maxMarks) { setErr(`Enter a score between 0 and ${maxMarks}.`); return; }
-    setErr(""); setBusy("verified");
-    try { await api.post(`/assignment-submissions/${sub.id}/verify`, { verdict: "verified", score: n, feedback: feedback.trim() }); toast.success(`Scored ${n}/${maxMarks}`); onDone(); }
-    catch (e) { toast.error(errText(e)); setBusy(""); }
-  };
-  const redo = async () => {
-    if (!feedback.trim()) { setErr("Feedback is required to send work back for redo."); return; }
-    setErr(""); setBusy("redo");
-    try { await api.post(`/assignment-submissions/${sub.id}/verify`, { verdict: "redo", feedback: feedback.trim() }); toast.success("Sent back for redo"); onDone(); }
-    catch (e) { toast.error(errText(e)); setBusy(""); }
-  };
-
-  return (
-    <div className="mt-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 p-3 space-y-2.5" data-testid={`asg-review-panel-${sub.id}`}>
-      <div className="flex items-center gap-2">
-        <label className="text-xs font-medium text-slate-500">Score</label>
-        <Input type="number" min="0" max={maxMarks} value={score} onChange={(e) => { setScore(e.target.value); if (err) setErr(""); }} className="w-20 h-9" data-testid={`asg-score-input-${sub.id}`} />
-        <span className="text-sm text-slate-400">/ {maxMarks}</span>
-      </div>
-      <div>
-        <label className="text-xs font-medium text-slate-500">Feedback <span className="text-slate-400">(optional to verify, required for redo)</span></label>
-        <Textarea value={feedback} onChange={(e) => { setFeedback(e.target.value); if (err) setErr(""); }} rows={2} placeholder="Write feedback for the student…" className="mt-1" data-testid={`asg-feedback-${sub.id}`} />
-      </div>
-      {err && <p className="text-xs text-rose-600" data-testid={`asg-review-error-${sub.id}`}>{err}</p>}
-      <div className="flex gap-2">
-        <Button size="sm" disabled={!!busy} onClick={verify} data-testid={`asg-verify-${sub.id}`}><Check size={14} className="mr-1.5" /> {busy === "verified" ? "Saving…" : "Verify with score"}</Button>
-        <Button size="sm" variant="outline" disabled={!!busy || !feedback.trim()} onClick={redo} data-testid={`asg-redo-${sub.id}`}><RotateCcw size={14} className="mr-1.5" /> {busy === "redo" ? "Sending…" : "Send back for redo"}</Button>
-        <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
-      </div>
-    </div>
   );
 }
 

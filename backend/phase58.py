@@ -391,7 +391,7 @@ async def thread_staff_ids(t):
 
 
 @api.get("/chat/threads")
-async def list_threads(class_name: str = "", status: str = "", user: dict = Depends(S.get_current_user)):
+async def list_threads(class_name: str = "", status: str = "", student_id: str = "", user: dict = Depends(S.get_current_user)):
     iid = user.get("institution_id")
     q = {"institution_id": iid}
     if user["role"] == "parent":
@@ -408,7 +408,14 @@ async def list_threads(class_name: str = "", status: str = "", user: dict = Depe
         q["status"] = status
     rows = [await thread_view(t, user["id"]) async for t in db.parent_threads.find(q, {"_id": 0}).sort("last_message_at", -1).limit(500)]
     rows.sort(key=lambda r: (r["unread"] == 0,))
-    return {"threads": rows, "unread_total": sum(r["unread"] for r in rows), "timezone": str(await S._inst_tz(iid))}
+    by_student = {}
+    for r in rows:
+        by_student[r["student_id"]] = by_student.get(r["student_id"], 0) + r["unread"]
+    total = sum(r["unread"] for r in rows)
+    if student_id:
+        rows = [r for r in rows if r["student_id"] == student_id]
+    return {"threads": rows, "unread_total": total, "unread_by_student": by_student,
+            "unread_selected": sum(r["unread"] for r in rows) if student_id else total, "timezone": str(await S._inst_tz(iid))}
 
 
 @api.get("/chat/unread")
@@ -416,7 +423,8 @@ async def chat_unread(user: dict = Depends(S.get_current_user)):
     if user["role"] not in ("parent", "teacher", "institution_admin"):
         return {"unread": 0}
     try:
-        return {"unread": (await list_threads(user=user))["unread_total"]}
+        d = await list_threads(user=user)
+        return {"unread": d["unread_total"], "by_student": d["unread_by_student"]}
     except HTTPException:
         return {"unread": 0}
 
@@ -427,9 +435,10 @@ async def _store_attachment(iid, file: UploadFile):
     ct = (file.content_type or "").lower()
     if ct not in ATTACH_TYPES:
         raise HTTPException(status_code=400, detail="Attach a JPG, PNG, WEBP image or a PDF")
-    data = await file.read()
+    import phase61
+    data, ct = await phase61.shrink_upload(await file.read(), ct)
     if len(data) > ATTACH_MAX:
-        raise HTTPException(status_code=400, detail="Attachments can be at most 5 MB")
+        raise HTTPException(status_code=413, detail="Attachments can be at most 5 MB (PDFs) — photos are resized automatically")
     path = f"lnmo/{iid}/chat/{uuid.uuid4()}.{ATTACH_TYPES[ct]}"
     await asyncio.to_thread(S._put_object, path, data, ct)
     return {"path": path, "name": file.filename[:120], "content_type": ct, "size": len(data)}
@@ -590,7 +599,18 @@ async def get_thread(tid: str, user: dict = Depends(S.get_current_user)):
     t = await db.parent_threads.find_one({"id": tid}, {"_id": 0})
     view = await thread_view(t, user["id"])
     parent = await db.users.find_one({"id": t["parent_id"]}, {"_id": 0, "phone": 1, "email": 1}) or {}
-    return {"thread": view, "messages": msgs, "timezone": str(await S._inst_tz(t["institution_id"])),
+    import phase61
+    sec = await db.sections.find_one({"institution_id": t["institution_id"], "class_name": t.get("class_name"), "name": t.get("section")}, {"_id": 0, "class_teacher_id": 1}) or {}
+    staff = await thread_staff_ids(t) if user["role"] != "parent" else {sec.get("class_teacher_id")} - {None}
+    ids = list({m["sender_id"] for m in msgs} | {t["parent_id"]} | staff)
+    people = await phase61.add_photos([{"id": i} for i in ids], "u")
+    pics = {x["id"]: x for x in people}
+    for m in msgs:
+        m["sender_thumb_url"] = (pics.get(m["sender_id"]) or {}).get("thumb_url")
+    names = {u["id"]: u for u in await db.users.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "name": 1, "role": 1}).to_list(100)}
+    participants = [{"id": i, "name": names[i].get("name"), "role": names[i].get("role"), **{k: pics[i][k] for k in ("photo_url", "thumb_url")}}
+                    for i in ids if i in names]
+    return {"thread": view, "messages": msgs, "participants": participants, "timezone": str(await S._inst_tz(t["institution_id"])),
             "parent_contact": None if user["role"] == "parent" else {"phone": parent.get("phone"), "email": real_email(parent)},
             "can_moderate": user["role"] != "parent"}
 

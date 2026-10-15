@@ -8,6 +8,7 @@ import { api } from "@/src/lib/api";
 import { usePSections, useTodayAttendance } from "@/src/principal/hooks";
 import { TabScreen } from "@/src/ui/Screen";
 import { ViewPill } from "@/src/ui/ViewSwitch";
+import { Avatar } from "@/src/ui/brandbits";
 import { C, Card, SectionTitle, Skeleton, StatusChip, k, type IconName } from "@/src/ui/kit";
 import { fmtDate, inr, todayISO } from "@/src/lib/format";
 import { fonts } from "@/src/theme";
@@ -37,7 +38,7 @@ export default function PrincipalToday() {
   const scope = user?.principal?.scope_type === "whole_school" ? "Whole school" : "My divisions";
   const loading = sec.isLoading || att.loading;
   return (
-    <TabScreen testID="principal-today-screen" title="Today" showSwitcher={false} right={<ViewPill to="teacher" />}>
+    <TabScreen testID="principal-today-screen" title="Today" showSwitcher={false} right={<View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><ViewPill to="teacher" /><Avatar name={user?.name || "P"} uri={user?.thumb_url} size={40} testID="principal-today-photo" /></View>}>
       <View style={{ gap: 4 }}>
         <Text style={k.h1} testID="principal-greeting">Hello, {user?.name?.split(" ")[0]}</Text>
         <Text style={k.small}>{fmtDate(todayISO(), { weekday: true })} · Principal · {scope}</Text>

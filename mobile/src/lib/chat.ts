@@ -1,7 +1,7 @@
 // One shared chat WebSocket (same protocol as the web: /api/ws/chat). Mobile passes the
 // token as ?token= (RN/web can't always set WS headers). After 3 failed connects callers
 // fall back to 10s polling while we keep retrying in the background.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BACKEND, getToken } from "./api";
 
 export type ChatStatus = "connecting" | "live" | "reconnecting" | "polling";
@@ -15,17 +15,21 @@ let failures = 0;
 let timer: any = null;
 let users = 0;
 let ping: any = null;
+let everOpened = false;
 
 const setStatus = (s: ChatStatus) => { status = s; statusListeners.forEach((f) => f(s)); };
 const url = () => `${BACKEND.replace(/^http/, "ws")}/api/ws/chat?token=${encodeURIComponent(getToken() || "")}`;
 
 function connect() {
   clearTimeout(timer);
-  if (ws || users === 0 || !getToken()) return;
+  if (ws || users === 0) return;
+  if (!getToken()) { timer = setTimeout(connect, 800); return; } // cold start (e.g. opened from a notification): token still loading
   let opened = false;
   try { ws = new WebSocket(url()); } catch { ws = null; failures += 1; retry(); return; }
   ws.onopen = () => {
+    const wasDown = everOpened; everOpened = true;
     opened = true; failures = 0; setStatus("live");
+    if (wasDown) listeners.forEach((f) => f({ type: "reconnected" })); // catch up on anything missed while down
     clearInterval(ping);
     ping = setInterval(() => sendChat({ type: "ping" }), 25000);
   };
@@ -61,21 +65,27 @@ export function closeChat() {
   setStatus("connecting");
 }
 
+// Subscribes once per mount: the latest handler lives in a ref, so re-renders (new callbacks) never
+// unsubscribe/close/reopen the shared socket.
 export function useChatSocket(onEvent: ((e: Ev) => void) | null) {
   const [s, setS] = useState<ChatStatus>(status);
+  const ref = useRef(onEvent);
+  useEffect(() => { ref.current = onEvent; });
+  const enabled = Boolean(onEvent);
   useEffect(() => {
-    if (!onEvent) return undefined;
+    if (!enabled) return undefined;
+    const fn = (e: Ev) => ref.current?.(e);
     users += 1;
     statusListeners.add(setS);
-    listeners.add(onEvent);
+    listeners.add(fn);
     connect();
     setS(status);
     return () => {
       users -= 1;
       statusListeners.delete(setS);
-      listeners.delete(onEvent);
-      if (users === 0) closeChat();
+      listeners.delete(fn);
+      if (users === 0) { closeChat(); everOpened = false; }
     };
-  }, [onEvent]);
+  }, [enabled]);
   return s;
 }

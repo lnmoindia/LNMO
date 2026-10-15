@@ -136,7 +136,7 @@ def test_chat_flow(ctx):
     mid = r["message"]["id"]
     assert r["message"]["attachment"]["size"] == len(PNG)
     big = p1.post(f"{API}/chat/threads/{tid}/messages", data={"body": "big"}, files={"file": ("b.pdf", b"0" * (5 * 1024 * 1024 + 1), "application/pdf")})
-    assert big.status_code == 400
+    assert big.status_code == 413  # Phase 61: oversize uploads return JSON 413
     inbox = ct.get(f"{API}/chat/threads").json()
     assert inbox["threads"][0]["id"] == tid and inbox["threads"][0]["unread"] == 1
     assert ct.get(f"{API}/chat/messages/{mid}/attachment").content == PNG

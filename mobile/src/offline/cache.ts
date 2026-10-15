@@ -47,6 +47,6 @@ export async function clearOfflineCache() {
 export const sheetName = (c: string, s: string, d: string) => `sheet.${c}.${s}.${d}`;
 // Only what the register needs (keeps the cache small on Android).
 export const shrinkSheet = (d: any) => ({
-  students: (d?.students || []).map((st: any) => ({ id: st.id, first_name: st.first_name, last_name: st.last_name, admission_no: st.admission_no })),
+  students: (d?.students || []).map((st: any) => ({ id: st.id, first_name: st.first_name, last_name: st.last_name, admission_no: st.admission_no, thumb_url: st.thumb_url || null })),
   record: d?.record ?? null,
 });

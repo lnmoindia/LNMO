@@ -8,6 +8,7 @@ import { useAttendanceSheet, useMyClass, useMySubs, useTeacherTT, useTeacherWork
 import { api } from "@/src/lib/api";
 import { TabScreen } from "@/src/ui/Screen";
 import { ViewPill } from "@/src/ui/ViewSwitch";
+import { Avatar } from "@/src/ui/brandbits";
 import { Button, C, Card, Empty, ErrorState, SectionTitle, SkeletonList, k } from "@/src/ui/kit";
 import { DAY_SHORT, fmtDate, fmtTime, hourNow, minutesNow, toMin, todayISO, todayKey } from "@/src/lib/format";
 import { fonts } from "@/src/theme";
@@ -34,7 +35,7 @@ export default function TeacherToday() {
   if (toReview) alerts.push(["review", "inbox", `${toReview} submission${toReview > 1 ? "s" : ""} to review`, "/teacher/homework"]);
   if (home && att.data && !att.data.record && working(tt.data)) alerts.push(["attendance", "check-square", `Attendance not marked yet for ${home.class_name} ${home.name}`, "/teacher/attendance"]);
   return (
-    <TabScreen testID="teacher-today-screen" showSwitcher={false} right={<ViewPill to="principal" />}>
+    <TabScreen testID="teacher-today-screen" showSwitcher={false} right={<View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><ViewPill to="principal" /><Avatar name={user?.name || "T"} uri={user?.thumb_url} size={40} testID="teacher-today-photo" /></View>}>
       <View style={{ gap: 2 }}>
         <Text style={k.h1} testID="teacher-greeting">{greet()}, {(user?.name || "").split(" ")[0]}</Text>
         <Text style={k.small}>{fmtDate(today, { weekday: true })}{home ? ` · Class teacher of ${home.class_name} ${home.name}` : ""}</Text>
