@@ -1,0 +1,4 @@
+# Mobile iteration 3 (Phase M2 — Student app)
+- Verified (web preview 390x844): SPS-001 + aarav login → Today (classes w/ cover badges, due soon, overdue, exam countdown, latest result, notices, tutor shortcut), Timetable week, Homework filters + detail + submission (note + image → Submitted), AI Tutor Science (1 real question, markdown + LaTeX clean, history sheet, reopen), More pages (exams, results, subject detail, attendance, library, fees read-only, profile, achievements, notices). Parent regression OK. Android bundle compiles.
+- Not verified: Now/Next highlight during school hours (tested after hours), camera/PDF pickers on device, photo upload, library file open (no files in data), AI 429/403 messages (code paths only).
+- Test data created: aarav submission for "Science: label a plant cell diagram"; one AI tutor chat in Science.

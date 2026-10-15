@@ -67,6 +67,19 @@ def make_tokens(user):
     return access, refresh
 
 
+async def with_mobile_tokens(request: Request, out):
+    """Mobile app (header X-Client: mobile) can't use httpOnly cookies — also return the tokens in the JSON.
+    Web behaviour is unchanged (no header → identical response)."""
+    if request is None or (request.headers.get("x-client") or "").lower() != "mobile":
+        return out
+    if isinstance(out, dict) and out.get("id"):
+        u = await db.users.find_one({"id": out["id"]})
+        if u:
+            access, refresh = make_tokens(u)
+            out = {**out, "access_token": access, "refresh_token": refresh, "token_type": "bearer"}
+    return out
+
+
 def set_auth_cookies(response: Response, access: str, refresh: str):
     response.set_cookie("access_token", access, httponly=True, secure=True, samesite="none", max_age=86400, path="/")
     response.set_cookie("refresh_token", refresh, httponly=True, secure=True, samesite="none", max_age=604800, path="/")
@@ -95,6 +108,9 @@ async def get_current_user(request: Request) -> dict:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             token = auth[7:]
+    if not token and request.url.path == "/api/ws/chat":
+        # Mobile app: browsers/RN can't always set headers on a WebSocket, so allow ?token= for the chat socket only.
+        token = request.query_params.get("token")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
@@ -248,6 +264,27 @@ LOCK_MAX = 5
 LOCK_MINUTES = 15
 
 
+_ZW = re.compile(r"[\u200b-\u200d\u2060\ufeff]")
+
+
+def _clean_login_ident(raw) -> str:
+    """Normalise what phone keyboards send: drop zero-width chars, trim, and remove any whitespace
+    inside an email (emails can't contain spaces; Android keyboards may auto-insert one after '.')."""
+    s = _ZW.sub("", str(raw or "")).strip()
+    if "@" in s:
+        s = re.sub(r"\s+", "", s)
+    return s
+
+
+async def _find_user_by_login_email(email: str):
+    """Exact (lower-cased) match first; then a case-insensitive match for legacy mixed-case stored emails."""
+    u = await db.users.find_one({"email": email})
+    if u:
+        return u
+    rows = await db.users.find({"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}}).to_list(2)
+    return rows[0] if len(rows) == 1 else None
+
+
 def _login_phone(ident: str):
     """Canonical 10-digit mobile if the identifier is a phone number (+91/91/0 prefixes), else None."""
     if "@" in ident or not re.fullmatch(r"[\d\s\-+().]+", ident):
@@ -333,8 +370,8 @@ async def _record_login_failure(key: str, user: "dict | None" = None):
 
 
 @api.post("/auth/login")
-async def login(response: Response, payload: dict = Body(...)):
-    raw = (payload.get("email") or payload.get("identifier") or "").strip()
+async def login(response: Response, request: Request, payload: dict = Body(...)):
+    raw = _clean_login_ident(payload.get("email") or payload.get("identifier") or "")
     password = payload.get("password") or ""
     if not raw or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
@@ -344,7 +381,7 @@ async def login(response: Response, payload: dict = Body(...)):
         user = await _find_parent_by_login_phone(phone, payload)
     elif "@" in raw:
         ident, fail_msg = raw.lower(), "Invalid email or password"
-        user = await db.users.find_one({"email": ident})
+        user = await _find_user_by_login_email(ident)
     else:
         iid = await _login_school(payload)
         if not iid:
@@ -355,6 +392,9 @@ async def login(response: Response, payload: dict = Body(...)):
     if await _active_lock(keys):
         raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 15 minutes.")
     if not user or not user.get("password_hash") or not verify_password(password, user["password_hash"]):
+        # Diagnostics only (no secrets): which account key, whether it exists, client type.
+        logger.info("login failed: ident=%s found=%s client=%s pw_edge_ws=%s", ident, bool(user),
+                    request.headers.get("x-client") or "web", password != password.strip())
         await _record_login_failure(f"user:{user['id']}" if user else ident, user)
         raise HTTPException(status_code=401, detail=fail_msg)
     if user.get("status") == "inactive":
@@ -363,7 +403,7 @@ async def login(response: Response, payload: dict = Body(...)):
     access, refresh = make_tokens(user)
     set_auth_cookies(response, access, refresh)
     await audit(user, "login", "session")
-    return await public_user(user)
+    return await with_mobile_tokens(request, await public_user(user))
 
 
 async def _lock_target(actor: dict, uid: str):
@@ -454,6 +494,12 @@ async def me(user: dict = Depends(get_current_user)):
 @api.post("/auth/refresh")
 async def refresh_token(request: Request, response: Response):
     token = request.cookies.get("refresh_token")
+    mobile = (request.headers.get("x-client") or "").lower() == "mobile"
+    if not token and mobile:
+        try:
+            token = ((await request.json()) or {}).get("refresh_token")
+        except Exception:
+            token = None
     if not token:
         raise HTTPException(status_code=401, detail="No refresh token")
     try:
@@ -467,6 +513,8 @@ async def refresh_token(request: Request, response: Response):
         raise HTTPException(status_code=401, detail="Session expired — please sign in again")
     access, refresh = make_tokens(user)
     set_auth_cookies(response, access, refresh)
+    if mobile:
+        return {"message": "refreshed", "access_token": access, "refresh_token": refresh, "token_type": "bearer"}
     return {"message": "refreshed"}
 
 
@@ -3399,12 +3447,24 @@ def _weekday_code(date_str: str):
         raise HTTPException(status_code=400, detail="Date must be a valid YYYY-MM-DD")
 
 
+_PUSH_HOOKS: list = []  # push.py (Phase M3) registers here; hooks only schedule background work
+
+
+def _push(event, **kw):
+    for h in _PUSH_HOOKS:
+        try:
+            h(event, **kw)
+        except Exception:
+            logger.exception("push hook failed (%s)", event)
+
+
 async def _notify(iid, user_id, ntype, title, body, related_id=None):
     if not user_id:
         return
     await db.notifications.insert_one({
         "id": str(uuid.uuid4()), "institution_id": iid, "user_id": user_id, "type": ntype,
         "title": title, "body": body, "related_id": related_id, "read": False, "created_at": now_iso()})
+    _push("notify", iid=iid, user_id=user_id, ntype=ntype, title=title, body=body, related_id=related_id)
 
 
 async def _manager_recipients(iid, class_names=None, teacher_id=None):
@@ -3693,6 +3753,7 @@ async def cancel_absence(absence_id: str, body: CancelAbsenceRequest, user: dict
         await db.substitutions.update_one({"id": s["id"]}, {"$set": {
             "status": "cancelled", "previous_status": s["status"], "cancelled_at": now_iso(), "cancelled_by": user["id"],
             "cancel_reason": reason, "updated_at": now_iso()}})
+        _push("section_cover", iid=iid, sub=s, kind="cancelled")
         cancelled += 1
     await db.absences.update_one({"id": absence_id}, {"$set": {
         "status": "cancelled", "cancelled_at": now_iso(), "cancelled_by": user["id"], "cancelled_by_name": user.get("name"),
@@ -3729,6 +3790,8 @@ async def remove_cover(sub_id: str, body: RemoveCoverRequest = Body(default=Remo
     await db.substitutions.update_one({"id": sub_id}, {"$set": {
         "status": "open", "substitute_teacher_id": None, "substitute_name": None, "requested_teacher_ids": [],
         "responses": {}, "cover_history": hist, "updated_at": now_iso()}})
+    if s["status"] == "assigned":
+        _push("section_cover", iid=iid, sub=s, kind="removed")
     await audit(user, "remove_cover", "substitutions", sub_id, f"{await _sub_label(s)} {s['date']} · {s.get('substitute_name') or 'asks withdrawn'}")
     return {"ok": True, "notified": len(targets)}
 
@@ -3858,6 +3921,7 @@ async def _assign_sub(iid, sub, teacher, user):
         "substitute_name": teacher.get("name"), "assigned_by": user["id"], "assigned_at": now_iso()}})
     await _notify(iid, teacher["id"], "sub_assigned", "Substitution assigned",
                   f"Cover {sub['class_name']} {sub.get('section') or ''} {sub['subject']} (P{sub['period_no']}) on {sub['date']}", sub["id"])
+    _push("section_cover", iid=iid, sub={**sub, "substitute_name": teacher.get("name")}, kind="assigned")
 
 
 @api.post("/substitutions/{sub_id}/assign")
@@ -6305,7 +6369,11 @@ async def public_parent_setup_resolve(token: str):
 
 
 @api.post("/public/parent-setup/{token}")
-async def public_parent_setup_complete(token: str, response: Response, payload: dict = Body(...)):
+async def public_parent_setup_complete(token: str, response: Response, request: Request, payload: dict = Body(...)):
+    return await with_mobile_tokens(request, await _parent_setup_complete(token, response, payload))
+
+
+async def _parent_setup_complete(token: str, response: Response, payload: dict):
     if "." not in token:
         return await phase60.complete_new_token(token, response, payload)
     data = _verify_secure_link(token)
@@ -6367,7 +6435,7 @@ async def public_parent_register(request: Request, response: Response, payload: 
     access, refresh = make_tokens(u)
     if response is not None:
         set_auth_cookies(response, access, refresh)
-    return await public_user(u)
+    return await with_mobile_tokens(request, await public_user(u))
 
 
 
@@ -6905,7 +6973,7 @@ async def list_homework(status: str = "", class_name: str = "", subject: str = "
                         date_from: str = "", date_to: str = "", user: dict = Depends(get_current_user)):
     iid = user["institution_id"]
     role = user["role"]
-    q = {"institution_id": iid}
+    q = {"institution_id": iid, "deleted": {"$ne": True}}  # soft-hidden (deleted=True) homework is excluded
     if status:
         q["status"] = status
     if subject:
@@ -6962,7 +7030,7 @@ async def _parent_homework(user, user_student_id=None):
         subs = {s["homework_id"]: s for s in await db.homework_submissions.find(
             {"institution_id": iid, "student_id": sid}, {"_id": 0}).to_list(5000)}
         for hw in await db.homework.find(
-                {"institution_id": iid, "class_name": st["class_name"], "section": st.get("section")},
+                {"institution_id": iid, "class_name": st["class_name"], "section": st.get("section"), "deleted": {"$ne": True}},
                 {"_id": 0}).sort("created_at", -1).to_list(500):
             hw["student_id"] = sid
             hw["my_submission"] = subs.get(hw["id"])
@@ -7207,7 +7275,7 @@ async def homework_stats(student_id: str, date_from: str = "", date_to: str = ""
         raise HTTPException(status_code=403, detail="Forbidden")
     if role in ("teacher", "institution_admin") and not (role == "teacher" and not await active_principal(user)):
         await guard_principal_class(user, student.get("class_name"))
-    hwq = {"institution_id": iid, "class_name": student.get("class_name"), "section": student.get("section")}
+    hwq = {"institution_id": iid, "class_name": student.get("class_name"), "section": student.get("section"), "deleted": {"$ne": True}}
     if date_from or date_to:
         hwq["due_date"] = {}
         if date_from:
@@ -7698,7 +7766,7 @@ async def _monitor_scope_classes(user):
 async def _monitor_data(iid, scope_classes, date_from, date_to, kind):
     items_col_fn, subs_col_fn, fk = _HW_SOURCES[kind]
     items_col, subs_col = items_col_fn(), subs_col_fn()
-    q = {"institution_id": iid, "created_at": {"$gte": date_from, "$lte": date_to + "T23:59:59"}}
+    q = {"institution_id": iid, "created_at": {"$gte": date_from, "$lte": date_to + "T23:59:59"}, "deleted": {"$ne": True}}
     items = await items_col.find(q, {"_id": 0}).to_list(5000)
     if scope_classes is not None:
         items = [it for it in items if it["class_name"] in scope_classes]
@@ -7976,7 +8044,7 @@ async def class_monthly_report(class_id: str, month: str = "", user: dict = Depe
     out_sections = []
     for sec in sections:
         secname = sec["name"]
-        hw_items = await db.homework.find({"institution_id": iid, "class_name": cn, "section": secname, "due_date": due_range}, {"_id": 0, "id": 1}).to_list(2000)
+        hw_items = await db.homework.find({"institution_id": iid, "class_name": cn, "section": secname, "due_date": due_range, "deleted": {"$ne": True}}, {"_id": 0, "id": 1}).to_list(2000)
         asg_items = await db.assignments.find({"institution_id": iid, "class_name": cn, "section": secname, "due_date": due_range}, {"_id": 0, "id": 1}).to_list(2000)
         hw_ids = [h["id"] for h in hw_items]
         asg_ids = [a["id"] for a in asg_items]
@@ -8726,7 +8794,7 @@ async def revoke_principal(pid: str, user: dict = Depends(require_roles("institu
 
 
 @api.post("/auth/change-password")
-async def change_password(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+async def change_password(request: Request, payload: dict = Body(...), user: dict = Depends(get_current_user)):
     new = payload.get("new_password") or ""
     if user.get("pw_set_by_staff"):
         if not _pw_strong(new):
@@ -8739,7 +8807,9 @@ async def change_password(payload: dict = Body(...), user: dict = Depends(get_cu
                                                             "password_changed_at": now_iso()}, "$unset": {"pw_set_by_staff": ""}})
     if user.get("pw_set_by_staff"):
         await audit(user, "password_changed_after_reset", "users", user["id"], user.get("name"))
-    return {"message": "Password updated"}
+    out = await with_mobile_tokens(request, {"message": "Password updated", "id": user["id"]})
+    out.pop("id", None)
+    return out
 
 
 # ---------------- Global search ----------------
@@ -14477,6 +14547,8 @@ async def reset_status(user: dict = Depends(require_roles("platform_admin"))):
 import phase58  # noqa: E402,F401  (Phase 58 routes register on `api`)
 import phase59  # noqa: E402,F401  (Phase 59 routes register on `api`)
 import phase60  # noqa: E402,F401  (Phase 60 routes register on `api`)
+import scan as _scan_routes  # noqa: E402,F401  (document scanner routes register on `api`)
+import push as _push_routes  # noqa: E402,F401  (Phase M3 push notification routes + _notify hook)
 
 app.include_router(api)
 
